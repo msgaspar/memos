@@ -15,7 +15,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/usememos/memos/internal/base"
+	"github.com/usememos/memos/internal/identifier"
 	storepb "github.com/usememos/memos/proto/gen/store"
 )
 
@@ -159,7 +159,7 @@ func validateDeploymentIdentityProvider(provider *storepb.IdentityProvider) erro
 	if provider.Id != 0 {
 		return errors.New("id must be omitted")
 	}
-	if !base.UIDMatcher.MatchString(provider.Uid) {
+	if !identifier.UIDMatcher.MatchString(provider.Uid) {
 		return errors.New("uid is invalid")
 	}
 	if strings.TrimSpace(provider.Name) == "" {
@@ -286,6 +286,16 @@ func validateAndNormalizeDeploymentInstanceSetting(setting *storepb.InstanceSett
 		}
 		if err := normalizeDeploymentAISetting(setting.GetAiSetting()); err != nil {
 			return err
+		}
+	case storepb.InstanceSettingKey_ACCESS:
+		access := setting.GetAccessSetting()
+		if access == nil {
+			return errors.New("accessSetting must be populated for key ACCESS")
+		}
+		switch access.AccessMode {
+		case storepb.InstanceAccessMode_INSTANCE_ACCESS_MODE_PRIVATE, storepb.InstanceAccessMode_INSTANCE_ACCESS_MODE_PUBLIC:
+		default:
+			return errors.New("accessSetting.accessMode must be PRIVATE or PUBLIC")
 		}
 	case storepb.InstanceSettingKey_BASIC, storepb.InstanceSettingKey_TAGS:
 		return errors.Errorf("key %s cannot be deployment configured", setting.Key)

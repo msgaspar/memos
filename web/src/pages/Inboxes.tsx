@@ -3,6 +3,7 @@ import { sortBy } from "lodash-es";
 import { BellIcon } from "lucide-react";
 import MemoCommentMessage from "@/components/Inbox/MemoCommentMessage";
 import MemoMentionMessage from "@/components/Inbox/MemoMentionMessage";
+import SpaceInvitationMessage from "@/components/Inbox/SpaceInvitationMessage";
 import Placeholder from "@/components/Placeholder";
 import { useAppSidebar } from "@/contexts/AppSidebarContext";
 import { useNotifications } from "@/hooks/useUserQueries";
@@ -50,7 +51,7 @@ const Inboxes = () => {
           <div className="w-full">
             {notifications.length === 0 ? (
               <Placeholder
-                variant="empty"
+                scene="inbox"
                 message={filter === "unread" ? t("inbox.no-unread") : filter === "archived" ? t("inbox.no-archived") : t("message.no-data")}
               />
             ) : (
@@ -61,6 +62,9 @@ const Inboxes = () => {
                   }
                   if (notification.type === UserNotification_Type.MEMO_MENTION) {
                     return <MemoMentionMessage key={notification.name} notification={notification} />;
+                  }
+                  if (notification.type === UserNotification_Type.SPACE_INVITATION) {
+                    return <SpaceInvitationMessage key={notification.name} notification={notification} />;
                   }
                   return null;
                 })}

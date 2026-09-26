@@ -1,7 +1,7 @@
 import { create } from "@bufbuild/protobuf";
 import { FieldMaskSchema } from "@bufbuild/protobuf/wkt";
-import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { memoViewServiceClient, userServiceClient } from "@/connect";
+import { type QueryClient, queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { userServiceClient } from "@/connect";
 import useCurrentUser from "@/hooks/useCurrentUser";
 import { buildUserSettingName, userNamePrefix } from "@/lib/resource-names";
 import { mergeTagCounts } from "@/lib/tag";
@@ -9,6 +9,8 @@ import {
   type ListAllUserStatsRequest,
   ListAllUserStatsRequestSchema,
   User,
+  UserNotification,
+  UserNotification_Status,
   UserSetting,
   UserSetting_GeneralSetting,
   UserSetting_Key,
@@ -26,7 +28,8 @@ export const userKeys = {
   details: () => [...userKeys.all, "detail"] as const,
   detail: (name: string) => [...userKeys.details(), name] as const,
   stats: () => [...userKeys.all, "stats"] as const,
-  userStats: (name: string) => [...userKeys.stats(), name] as const,
+  userStats: (name: string, filter?: string) =>
+    filter ? ([...userKeys.stats(), name, filter] as const) : ([...userKeys.stats(), name] as const),
   allUserStats: (request: Partial<ListAllUserStatsQuery>) => [...userKeys.stats(), "all", request] as const,
   currentUser: () => [...userKeys.all, "current"] as const,
   memoViews: (parent?: string) => [...userKeys.all, "memoViews", parent] as const,
@@ -49,14 +52,14 @@ export function useUser(name: string, options?: { enabled?: boolean }) {
   });
 }
 
-export function useUserStats(username?: string, options?: { enabled?: boolean }) {
+export function useUserStats(username?: string, options?: { enabled?: boolean; filter?: string }) {
   return useQuery({
-    queryKey: username ? userKeys.userStats(username) : userKeys.stats(),
+    queryKey: username ? userKeys.userStats(username, options?.filter) : userKeys.stats(),
     queryFn: async () => {
       if (!username) {
         throw new Error("Username is required");
       }
-      const stats = await userServiceClient.getUserStats({ name: username });
+      const stats = await userServiceClient.getUserStats({ name: username, filter: options?.filter });
       return stats;
     },
     enabled: !!username && (options?.enabled ?? true),
@@ -79,7 +82,7 @@ export function useMemoViews(parent?: string) {
     queryKey: userKeys.memoViews(parent),
     queryFn: async () => {
       if (!parent) return [];
-      const { memoViews } = await memoViewServiceClient.listMemoViews({ parent });
+      const { memoViews } = await userServiceClient.listMemoViews({ parent });
       return memoViews;
     },
     enabled: !!parent,
@@ -100,6 +103,46 @@ export function useNotifications() {
     },
     enabled: !!currentUser?.name,
     staleTime: 1000 * 30, // 30 seconds - notifications should update frequently
+  });
+}
+
+const updateCachedNotifications = (queryClient: QueryClient, update: (notifications: UserNotification[]) => UserNotification[]) => {
+  const notifications = queryClient.getQueryData<UserNotification[]>(userKeys.notifications());
+  if (notifications !== undefined) {
+    queryClient.setQueryData<UserNotification[]>(userKeys.notifications(), update(notifications));
+  }
+};
+
+export function useArchiveNotification() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (name: string) =>
+      userServiceClient.updateUserNotification({
+        notification: { name, status: UserNotification_Status.ARCHIVED },
+        updateMask: create(FieldMaskSchema, { paths: ["status"] }),
+      }),
+    onSuccess: (updated) => {
+      updateCachedNotifications(queryClient, (notifications) =>
+        notifications.map((notification) => (notification.name === updated.name ? updated : notification)),
+      );
+      void queryClient.invalidateQueries({ queryKey: userKeys.notifications() });
+    },
+  });
+}
+
+export function useDeleteNotification() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (name: string) => {
+      await userServiceClient.deleteUserNotification({ name });
+      return name;
+    },
+    onSuccess: (name) => {
+      updateCachedNotifications(queryClient, (notifications) => notifications.filter((notification) => notification.name !== name));
+      void queryClient.invalidateQueries({ queryKey: userKeys.notifications() });
+    },
   });
 }
 

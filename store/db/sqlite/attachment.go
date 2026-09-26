@@ -9,12 +9,37 @@ import (
 	"github.com/pkg/errors"
 	"google.golang.org/protobuf/encoding/protojson"
 
-	"github.com/usememos/memos/internal/filter"
+	"github.com/usememos/memos/filter"
 	storepb "github.com/usememos/memos/proto/gen/store"
 	"github.com/usememos/memos/store"
 )
 
 func (d *DB) CreateAttachment(ctx context.Context, create *store.Attachment) (*store.Attachment, error) {
+	if create.Policy == nil {
+		return insertSQLiteAttachment(ctx, d.db, create)
+	}
+	if create.MemoID == nil || create.CreatorID != create.Policy.ActorUserID {
+		return nil, store.ErrMemoPermissionDenied
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := validateSQLiteMemoWritePolicy(ctx, tx, *create.MemoID, create.Policy, nil); err != nil {
+		return nil, err
+	}
+	attachment, err := insertSQLiteAttachment(ctx, tx, create)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return attachment, nil
+}
+
+func insertSQLiteAttachment(ctx context.Context, executor dbExecutor, create *store.Attachment) (*store.Attachment, error) {
 	fields := []string{"`uid`", "`filename`", "`blob`", "`type`", "`size`", "`creator_id`", "`memo_id`", "`storage_type`", "`reference`", "`payload`"}
 	placeholder := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
 	storageType := ""
@@ -32,7 +57,7 @@ func (d *DB) CreateAttachment(ctx context.Context, create *store.Attachment) (*s
 	args := []any{create.UID, create.Filename, create.Blob, create.Type, create.Size, create.CreatorID, create.MemoID, storageType, create.Reference, payloadString}
 
 	stmt := "INSERT INTO `attachment` (" + strings.Join(fields, ", ") + ") VALUES (" + strings.Join(placeholder, ", ") + ") RETURNING `id`, `created_ts`, `updated_ts`"
-	if err := d.db.QueryRowContext(ctx, stmt, args...).Scan(&create.ID, &create.CreatedTs, &create.UpdatedTs); err != nil {
+	if err := executor.QueryRowContext(ctx, stmt, args...).Scan(&create.ID, &create.CreatedTs, &create.UpdatedTs); err != nil {
 		return nil, err
 	}
 
@@ -82,6 +107,19 @@ func (d *DB) ListAttachments(ctx context.Context, find *store.FindAttachment) ([
 			return nil, errors.Wrap(err, "failed to append filter conditions")
 		}
 	}
+	if access := find.Access; access != nil {
+		scopeClauses := []string{}
+		if access.UserID != nil {
+			scopeClauses = append(scopeClauses, "(`attachment`.`memo_id` IS NULL AND EXISTS (SELECT 1 FROM `user` AS `attachment_user` WHERE `attachment_user`.`id` = ? AND `attachment_user`.`row_status` = 'NORMAL') AND `attachment`.`creator_id` = ?)")
+			args = append(args, *access.UserID, *access.UserID)
+		}
+		scopeClauses = append(scopeClauses, "(`attachment`.`memo_id` IS NOT NULL AND "+sqliteMemoAccessPredicate(access, "`memo`", "`attachment_member`", &args)+")")
+		if len(scopeClauses) == 0 {
+			where = append(where, "1 = 0")
+		} else {
+			where = append(where, "("+strings.Join(scopeClauses, " OR ")+")")
+		}
+	}
 
 	fields := []string{
 		"`attachment`.`id` AS `id`",
@@ -97,6 +135,7 @@ func (d *DB) ListAttachments(ctx context.Context, find *store.FindAttachment) ([
 		"`attachment`.`reference` AS `reference`",
 		"`attachment`.`payload` AS `payload`",
 		"CASE WHEN `memo`.`uid` IS NOT NULL THEN `memo`.`uid` ELSE NULL END AS `memo_uid`",
+		"`attachment_creator`.`username` AS `creator_username`",
 	}
 	if find.GetBlob {
 		fields = append(fields, "`attachment`.`blob` AS `blob`")
@@ -104,6 +143,8 @@ func (d *DB) ListAttachments(ctx context.Context, find *store.FindAttachment) ([
 
 	query := "SELECT " + strings.Join(fields, ", ") + " FROM `attachment`" + " " +
 		"LEFT JOIN `memo` ON `attachment`.`memo_id` = `memo`.`id`" + " " +
+		"LEFT JOIN `user` AS `attachment_creator` ON `attachment`.`creator_id` = `attachment_creator`.`id`" + " " +
+		"LEFT JOIN `space` AS `attachment_space` ON `memo`.`space_id` = `attachment_space`.`id`" + " " +
 		"WHERE " + strings.Join(where, " AND ") + " " +
 		"ORDER BY `attachment`.`updated_ts` DESC"
 	if find.Limit != nil {
@@ -139,6 +180,7 @@ func (d *DB) ListAttachments(ctx context.Context, find *store.FindAttachment) ([
 			&attachment.Reference,
 			&payloadBytes,
 			&attachment.MemoUID,
+			&attachment.CreatorUsername,
 		}
 		if find.GetBlob {
 			dests = append(dests, &attachment.Blob)
@@ -167,6 +209,40 @@ func (d *DB) ListAttachments(ctx context.Context, find *store.FindAttachment) ([
 }
 
 func (d *DB) UpdateAttachment(ctx context.Context, update *store.UpdateAttachment) error {
+	if update.Policy == nil {
+		return applySQLiteAttachmentUpdate(ctx, d.db, update)
+	}
+	if update.MemoID != nil {
+		return store.ErrMemoMutationConflict
+	}
+	attachmentIDs := []int32{update.ID}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	actor, err := requireSQLiteActiveMemoActor(ctx, tx, update.Policy.ActorUserID)
+	if err != nil {
+		return err
+	}
+	attachments, err := listSQLiteAttachmentSnapshots(ctx, tx, attachmentIDs)
+	if err != nil {
+		return err
+	}
+	memoIDs, err := store.ValidateAttachmentMutationTargets(update.Policy.ActorUserID, actor.Admin, attachmentIDs, attachments)
+	if err != nil {
+		return err
+	}
+	if err := authorizeSQLiteAttachmentMutation(ctx, tx, update.Policy.ActorUserID, actor.Admin, memoIDs, nil); err != nil {
+		return err
+	}
+	if err := applySQLiteAttachmentUpdate(ctx, tx, update); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func applySQLiteAttachmentUpdate(ctx context.Context, executor dbExecutor, update *store.UpdateAttachment) error {
 	set, args := []string{}, []any{}
 
 	if v := update.UID; v != nil {
@@ -191,7 +267,10 @@ func (d *DB) UpdateAttachment(ctx context.Context, update *store.UpdateAttachmen
 
 	args = append(args, update.ID)
 	stmt := "UPDATE `attachment` SET " + strings.Join(set, ", ") + " WHERE `id` = ?"
-	result, err := d.db.ExecContext(ctx, stmt, args...)
+	if len(set) == 0 {
+		return nil
+	}
+	result, err := executor.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return errors.Wrap(err, "failed to update attachment")
 	}
@@ -202,15 +281,7 @@ func (d *DB) UpdateAttachment(ctx context.Context, update *store.UpdateAttachmen
 }
 
 func (d *DB) DeleteAttachment(ctx context.Context, delete *store.DeleteAttachment) error {
-	stmt := "DELETE FROM `attachment` WHERE `id` = ?"
-	result, err := d.db.ExecContext(ctx, stmt, delete.ID)
-	if err != nil {
-		return err
-	}
-	if _, err := result.RowsAffected(); err != nil {
-		return err
-	}
-	return nil
+	return d.DeleteAttachments(ctx, []*store.DeleteAttachment{delete})
 }
 
 func (d *DB) DeleteAttachments(ctx context.Context, deletes []*store.DeleteAttachment) error {
@@ -222,12 +293,7 @@ func (d *DB) DeleteAttachments(ctx context.Context, deletes []*store.DeleteAttac
 	if err != nil {
 		return errors.Wrap(err, "failed to start attachment delete transaction")
 	}
-	defer func() {
-		if tx != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
+	defer func() { _ = tx.Rollback() }()
 	stmt := "DELETE FROM `attachment` WHERE `id` = ?"
 	for _, delete := range deletes {
 		result, err := tx.ExecContext(ctx, stmt, delete.ID)
@@ -239,9 +305,14 @@ func (d *DB) DeleteAttachments(ctx context.Context, deletes []*store.DeleteAttac
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return err
+	return tx.Commit()
+}
+
+// GetAttachmentStorageUsage returns the total persisted attachment size for a creator in bytes.
+func (d *DB) GetAttachmentStorageUsage(ctx context.Context, creatorID int32) (int64, error) {
+	var size int64
+	if err := d.db.QueryRowContext(ctx, "SELECT COALESCE(SUM(size), 0) FROM attachment WHERE creator_id = ?", creatorID).Scan(&size); err != nil {
+		return 0, errors.Wrap(err, "failed to sum attachment sizes")
 	}
-	tx = nil
-	return nil
+	return size, nil
 }

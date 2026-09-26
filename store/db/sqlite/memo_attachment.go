@@ -28,6 +28,45 @@ func (d *DB) ApplyMemoMutation(ctx context.Context, mutation *store.MemoMutation
 			_, _ = conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK")
 		}
 	}()
+	if err := validateSQLiteMemoRelationEndpoints(ctx, conn, mutation); err != nil {
+		return err
+	}
+	if create := mutation.MemoCreate; create != nil {
+		if err := validateSQLiteMemoCreate(ctx, conn, create); err != nil {
+			return err
+		}
+		if mutation.CommentContextMemoID != nil {
+			if err := authorizeSQLiteMemoComment(ctx, conn, *mutation.CommentContextMemoID, create.CreatorID); err != nil {
+				return err
+			}
+		}
+		if err := insertSQLiteMemo(ctx, conn, create); err != nil {
+			return err
+		}
+		mutation.MemoID = create.ID
+		mutation.MemoCreatorID = create.CreatorID
+		mutation.ExpectedMemoContent = create.Content
+		for _, relation := range mutation.ReferenceRelations {
+			if relation != nil {
+				relation.MemoID = create.ID
+			}
+		}
+		if mutation.CommentContextMemoID != nil {
+			if err := insertSQLiteMemoCommentRelation(ctx, conn, create.ID, *mutation.CommentContextMemoID); err != nil {
+				return err
+			}
+		}
+	}
+	policy := mutation.WritePolicy()
+	actorUserID := mutation.ActorUserID()
+	actorIsAdmin := false
+	if policy != nil {
+		snapshot, err := validateSQLiteMemoWritePolicy(ctx, conn, mutation.MemoID, policy, mutation.MemoUpdate)
+		if err != nil {
+			return err
+		}
+		actorIsAdmin = snapshot.ActorIsAdmin
+	}
 
 	var creatorID int32
 	var content string
@@ -39,6 +78,18 @@ func (d *DB) ApplyMemoMutation(ctx context.Context, mutation *store.MemoMutation
 	}
 	if creatorID != mutation.MemoCreatorID || content != mutation.ExpectedMemoContent {
 		return errors.Wrap(store.ErrMemoMutationConflict, "memo changed while applying mutation")
+	}
+	removedAttachments, err := listSQLiteAttachmentSnapshots(ctx, conn, mutation.RemovedAttachmentIDs)
+	if err != nil {
+		return errors.Wrap(err, "failed to read removed attachments")
+	}
+	if len(removedAttachments) != len(mutation.RemovedAttachmentIDs) {
+		return errors.Wrap(store.ErrMemoMutationConflict, "removed attachment no longer exists")
+	}
+	for _, attachment := range removedAttachments {
+		if !store.MemoAttachmentRemovalAllowed(attachment, mutation.MemoID, actorUserID, actorIsAdmin) {
+			return errors.Wrap(store.ErrMemoMutationConflict, "attachment is no longer removable from the memo")
+		}
 	}
 
 	for _, binding := range mutation.Bindings {
@@ -54,20 +105,21 @@ func (d *DB) ApplyMemoMutation(ctx context.Context, mutation *store.MemoMutation
 			if !memoID.Valid || memoID.Int32 != mutation.MemoID {
 				return errors.Wrapf(store.ErrMemoMutationConflict, "attachment %s is no longer bound to the memo", binding.UID)
 			}
-		} else if attachmentCreatorID != mutation.MemoCreatorID || memoID.Valid {
+		} else if !store.MemoAttachmentBindingOwnerAllowed(attachmentCreatorID, mutation.MemoCreatorID, actorUserID, actorIsAdmin) || memoID.Valid {
 			return errors.Wrapf(store.ErrMemoMutationConflict, "attachment %s is no longer available", binding.UID)
 		}
 		if _, err := conn.ExecContext(ctx, `UPDATE attachment SET memo_id = ?, updated_ts = ? WHERE id = ?`, mutation.MemoID, binding.UpdatedTs, binding.ID); err != nil {
 			return errors.Wrap(err, "failed to bind attachment")
 		}
 	}
-
-	for _, attachmentID := range mutation.RemovedAttachmentIDs {
-		result, err := conn.ExecContext(ctx, `UPDATE attachment SET memo_id = NULL WHERE id = ? AND memo_id = ?`, attachmentID, mutation.MemoID)
+	for _, attachment := range removedAttachments {
+		result, err := conn.ExecContext(ctx, `DELETE FROM attachment WHERE id = ? AND memo_id = ?`, attachment.ID, mutation.MemoID)
 		if err != nil {
-			return errors.Wrap(err, "failed to detach attachment")
+			return errors.Wrap(err, "failed to delete removed attachment")
 		}
-		if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		if rows, err := result.RowsAffected(); err != nil {
+			return errors.Wrap(err, "failed to count deleted removed attachment")
+		} else if rows != 1 {
 			return errors.Wrap(store.ErrMemoMutationConflict, "attachment is no longer bound to the memo")
 		}
 	}
@@ -99,6 +151,17 @@ func (d *DB) ApplyMemoMutation(ctx context.Context, mutation *store.MemoMutation
 		return errors.Wrap(err, "failed to commit memo transaction")
 	}
 	committed = true
+	return nil
+}
+
+func insertSQLiteMemoCommentRelation(ctx context.Context, executor memoUpdateExecer, memoID, contextMemoID int32) error {
+	if memoID <= 0 || contextMemoID <= 0 || memoID == contextMemoID {
+		return errors.New("invalid COMMENT relation")
+	}
+	if _, err := executor.ExecContext(ctx, `INSERT INTO memo_relation (memo_id, related_memo_id, type) VALUES (?, ?, ?)`,
+		memoID, contextMemoID, store.MemoRelationComment); err != nil {
+		return errors.Wrap(err, "failed to insert COMMENT relation")
+	}
 	return nil
 }
 
@@ -154,6 +217,11 @@ func applyMemoUpdate(ctx context.Context, executor memoUpdateExecer, update *sto
 			return errors.Wrap(err, "failed to marshal memo payload")
 		}
 		set, args = append(set, "`payload` = ?"), append(args, string(payload))
+	}
+	if update.ClearSpace {
+		set = append(set, "`space_id` = NULL")
+	} else if v := update.SpaceID; v != nil {
+		set, args = append(set, "`space_id` = ?"), append(args, *v)
 	}
 	if len(set) == 0 {
 		return nil

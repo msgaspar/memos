@@ -72,6 +72,7 @@ func TestMemoFilterContentUnicode(t *testing.T) {
 
 func TestMemoFilterContentUnicodeCaseFold(t *testing.T) {
 	t.Parallel()
+	skipUnicodeFoldOnD1(t)
 	tc := NewMemoFilterTestContext(t)
 	defer tc.Close()
 
@@ -179,6 +180,7 @@ func TestMemoFilterStartsWithCombinedAndNegated(t *testing.T) {
 
 func TestMemoFilterContentMatchesAdvanced(t *testing.T) {
 	t.Parallel()
+	skipRegexFiltersOnD1(t)
 	tc := NewMemoFilterTestContext(t)
 	defer tc.Close()
 
@@ -276,6 +278,7 @@ func TestMemoFilterContentEndsWith(t *testing.T) {
 
 func TestMemoFilterContentMatches(t *testing.T) {
 	t.Parallel()
+	skipRegexFiltersOnD1(t)
 	tc := NewMemoFilterTestContext(t)
 	defer tc.Close()
 
@@ -701,19 +704,19 @@ func TestMemoFilterCreatedTsComparison(t *testing.T) {
 	tc := NewMemoFilterTestContext(t)
 	defer tc.Close()
 
-	now := time.Now().Unix()
+	nowSec := time.Now().Unix()
 	tc.CreateMemo(NewMemoBuilder("memo-ts", tc.User.ID).Content("Timestamp test"))
 
 	// Test: created_ts < future (should match)
-	memos := tc.ListWithFilter(`created_ts < timestamp(` + formatInt64(now+3600) + `)`)
+	memos := tc.ListWithFilter(`created_ts < timestamp(` + formatInt64(nowSec+3600) + `)`)
 	require.Len(t, memos, 1)
 
 	// Test: created_ts > past (should match)
-	memos = tc.ListWithFilter(`created_ts > timestamp(` + formatInt64(now-3600) + `)`)
+	memos = tc.ListWithFilter(`created_ts > timestamp(` + formatInt64(nowSec-3600) + `)`)
 	require.Len(t, memos, 1)
 
 	// Test: created_ts > future (should not match)
-	memos = tc.ListWithFilter(`created_ts > timestamp(` + formatInt64(now+3600) + `)`)
+	memos = tc.ListWithFilter(`created_ts > timestamp(` + formatInt64(nowSec+3600) + `)`)
 	require.Len(t, memos, 0)
 }
 

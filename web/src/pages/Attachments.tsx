@@ -1,6 +1,6 @@
 import { create } from "@bufbuild/protobuf";
 import { LoaderCircleIcon, Trash2Icon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "react-hot-toast";
 import {
   AttachmentAudioRows,
@@ -16,10 +16,14 @@ import PreviewImageDialog from "@/components/PreviewImageDialog";
 import { Button } from "@/components/ui/button";
 import { attachmentServiceClient } from "@/connect";
 import { useAppSidebar } from "@/contexts/AppSidebarContext";
+import { useSpaceContext } from "@/contexts/SpaceContext";
 import { useAttachmentLibrary, useUnusedAttachmentLibrary } from "@/hooks/useAttachmentLibrary";
 import { useBatchDeleteAttachments } from "@/hooks/useAttachmentQueries";
+import useCurrentUser from "@/hooks/useCurrentUser";
 import useDialog from "@/hooks/useDialog";
+import { useUsersByNames } from "@/hooks/useUserQueries";
 import i18n from "@/i18n";
+import { combineCELFilters } from "@/lib/cel-filter";
 import { handleError } from "@/lib/error";
 import { ListAttachmentsRequestSchema } from "@/types/proto/api/v1/attachment_service_pb";
 import { useTranslate } from "@/utils/i18n";
@@ -37,14 +41,18 @@ const chunkNames = (names: string[], size: number) => {
   return chunks;
 };
 
-const listUnusedAttachmentNames = async () => {
+const listUnusedAttachmentNames = async (filter: string | undefined, selectedSpaceName: string | undefined) => {
+  if (selectedSpaceName) {
+    return [];
+  }
+
   const names: string[] = [];
   let pageToken = "";
 
   do {
     const response = await attachmentServiceClient.listAttachments(
       create(ListAttachmentsRequestSchema, {
-        filter: "memo_id == null",
+        filter: combineCELFilters("memo_id == null", filter),
         pageSize: UNUSED_PAGE_SIZE,
         pageToken,
       }),
@@ -59,8 +67,11 @@ const listUnusedAttachmentNames = async () => {
 
 const Attachments = () => {
   const t = useTranslate();
+  const currentUser = useCurrentUser();
   const deleteUnusedAttachmentsDialog = useDialog();
-  const { attachmentSection } = useAppSidebar();
+  const { attachmentSection, setAttachmentSection } = useAppSidebar();
+  const { memoFilter, selectedSpaceName, creatorUsername } = useSpaceContext();
+  const canShowUnused = !selectedSpaceName && (!creatorUsername || creatorUsername === currentUser?.username);
   const [previewState, setPreviewState] = useState({ open: false, initialIndex: 0 });
   const { mutateAsync: batchDeleteAttachments, isPending: isDeletingUnused } = useBatchDeleteAttachments();
   const {
@@ -77,7 +88,7 @@ const Attachments = () => {
     mediaPreviewItems,
     refetch,
     stats,
-  } = useAttachmentLibrary(i18n.language);
+  } = useAttachmentLibrary(i18n.language, memoFilter);
   const {
     error: unusedError,
     isComplete: unusedIsComplete,
@@ -85,7 +96,28 @@ const Attachments = () => {
     isLoading: unusedIsLoading,
     refetch: refetchUnused,
     unusedItems: completeUnusedItems,
-  } = useUnusedAttachmentLibrary(i18n.language, attachmentSection === "unused");
+  } = useUnusedAttachmentLibrary(i18n.language, memoFilter, attachmentSection === "unused" && canShowUnused);
+  const creatorNames = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [
+            ...mediaGroups.flatMap((group) => group.items.map((item) => item.primaryAttachment.creator)),
+            ...documentItems.map((item) => item.attachment.creator),
+            ...audioItems.map((item) => item.attachment.creator),
+            ...completeUnusedItems.map((item) => item.attachment.creator),
+          ].filter(Boolean),
+        ),
+      ),
+    [mediaGroups, documentItems, audioItems, completeUnusedItems],
+  );
+  const { data: creators } = useUsersByNames(creatorNames);
+
+  useEffect(() => {
+    if (!canShowUnused && attachmentSection === "unused") {
+      setAttachmentSection("all");
+    }
+  }, [attachmentSection, canShowUnused, setAttachmentSection]);
 
   const handlePreview = (itemId: string) => {
     const initialIndex = mediaPreviewItems.findIndex((item) => item.id === itemId);
@@ -94,7 +126,7 @@ const Attachments = () => {
 
   const handleDeleteUnusedAttachments = async () => {
     try {
-      const names = await listUnusedAttachmentNames();
+      const names = await listUnusedAttachmentNames(memoFilter, selectedSpaceName);
 
       if (names.length === 0) {
         await Promise.all([refetch(), refetchUnused()]);
@@ -146,7 +178,7 @@ const Attachments = () => {
               {t("resource.delete-all-unused")}
             </Button>
           </div>
-          <AttachmentUnusedRows items={completeUnusedItems} />
+          <AttachmentUnusedRows items={completeUnusedItems} creators={creators} />
         </div>
       );
     }
@@ -167,19 +199,19 @@ const Attachments = () => {
           {stats.media > 0 && (
             <section className="space-y-3">
               <h2 className="text-sm font-medium text-foreground">{t("attachment-library.tabs.media")}</h2>
-              <AttachmentMediaGrid groups={mediaGroups} onPreview={handlePreview} />
+              <AttachmentMediaGrid groups={mediaGroups} creators={creators} onPreview={handlePreview} />
             </section>
           )}
           {stats.documents > 0 && (
             <section className="space-y-3">
               <h2 className="text-sm font-medium text-foreground">{t("attachment-library.tabs.documents")}</h2>
-              <AttachmentDocumentRows items={documentItems} />
+              <AttachmentDocumentRows items={documentItems} creators={creators} />
             </section>
           )}
           {stats.audio > 0 && (
             <section className="space-y-3">
               <h2 className="text-sm font-medium text-foreground">{t("attachment-library.tabs.audio")}</h2>
-              <AttachmentAudioRows items={audioItems} />
+              <AttachmentAudioRows items={audioItems} creators={creators} />
             </section>
           )}
         </div>
@@ -188,17 +220,17 @@ const Attachments = () => {
 
     if (attachmentSection === "media") {
       if (stats.media === 0) return <AttachmentLibraryEmptyState tab="media" />;
-      return <AttachmentMediaGrid groups={mediaGroups} onPreview={handlePreview} />;
+      return <AttachmentMediaGrid groups={mediaGroups} creators={creators} onPreview={handlePreview} />;
     }
 
     if (attachmentSection === "documents") {
       if (stats.documents === 0) return <AttachmentLibraryEmptyState tab="documents" />;
-      return <AttachmentDocumentRows items={documentItems} />;
+      return <AttachmentDocumentRows items={documentItems} creators={creators} />;
     }
 
     if (attachmentSection === "audio") {
       if (stats.audio === 0) return <AttachmentLibraryEmptyState tab="audio" />;
-      return <AttachmentAudioRows items={audioItems} />;
+      return <AttachmentAudioRows items={audioItems} creators={creators} />;
     }
 
     return null;

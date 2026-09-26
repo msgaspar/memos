@@ -2,6 +2,7 @@ import { create } from "@bufbuild/protobuf";
 import { FieldMaskSchema } from "@bufbuild/protobuf/wkt";
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  AstroidIcon,
   CheckCircle2Icon,
   ClipboardCheckIcon,
   Clock3Icon,
@@ -9,6 +10,7 @@ import {
   FilterIcon,
   MapPinIcon,
   MoreVerticalIcon,
+  ParenthesesIcon,
   PencilIcon,
   PinIcon,
   PlusIcon,
@@ -23,13 +25,15 @@ import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { useLocation, useNavigate } from "react-router-dom";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import CustomIconPicker from "@/components/CustomIconPicker";
+import MemoViewIcon from "@/components/MemoViewIcon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { memoViewServiceClient } from "@/connect";
+import { userServiceClient } from "@/connect";
 import { useMemoFilterContext } from "@/contexts/MemoFilterContext";
 import useCurrentUser from "@/hooks/useCurrentUser";
 import useLoading from "@/hooks/useLoading";
@@ -37,7 +41,7 @@ import { useMemoViews, userKeys } from "@/hooks/useUserQueries";
 import { handleError } from "@/lib/error";
 import { getMemoViewId } from "@/lib/memo-views";
 import { cn } from "@/lib/utils";
-import { MemoView, MemoViewSchema } from "@/types/proto/api/v1/memo_view_service_pb";
+import { MemoView, MemoView_IconSchema, MemoViewSchema } from "@/types/proto/api/v1/user_service_pb";
 import { useTranslate } from "@/utils/i18n";
 
 const memoViewExamples = [
@@ -76,6 +80,18 @@ const memoViewExamples = [
     filter: 'tags.exists(t, t.startsWith("archive"))',
     description: "Match hierarchical tags by prefix.",
     icon: TagsIcon,
+  },
+  {
+    title: "Unassigned",
+    filter: "space == null",
+    description: "Memos that are not placed in any space.",
+    icon: AstroidIcon,
+  },
+  {
+    title: "In one space",
+    filter: 'space == "spaces/your-space-id"',
+    description: "Memos placed in a space. Use the space ID from its URL or settings.",
+    icon: AstroidIcon,
   },
   {
     title: "Open tasks",
@@ -164,6 +180,9 @@ const filterFields = [
   "content.matches(...)",
   "visibility",
   "pinned",
+  "space == null",
+  "space != null",
+  'space == "spaces/..."',
   "tag in [...]",
   "tags.exists(...)",
   "tags.all(...)",
@@ -250,7 +269,7 @@ const MemoViews = () => {
   const navigate = useNavigate();
   const user = useCurrentUser();
   const queryClient = useQueryClient();
-  const { data: memoViews = [] } = useMemoViews(user?.name);
+  const { data: memoViews = [], isPending, isError, refetch } = useMemoViews(user?.name);
   const { memoView: selectedMemoView, setMemoView } = useMemoFilterContext();
   const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
   const [draft, setDraft] = useState<MemoView>(createEmptyMemoView());
@@ -271,6 +290,7 @@ const MemoViews = () => {
           name: state.memoView.name,
           title: state.memoView.title,
           filter: state.memoView.filter,
+          icon: state.memoView.icon,
         }),
       );
       setIsCreateFormOpen(true);
@@ -292,6 +312,7 @@ const MemoViews = () => {
         name: draft.name,
         title: draft.title || example.title,
         filter: example.filter,
+        icon: draft.icon,
       }),
     );
     setIsCreateFormOpen(true);
@@ -313,6 +334,7 @@ const MemoViews = () => {
         name: memoView.name,
         title: memoView.title,
         filter: memoView.filter,
+        icon: memoView.icon,
       }),
     );
     setIsCreateFormOpen(true);
@@ -330,9 +352,9 @@ const MemoViews = () => {
 
     try {
       validateState.setLoading();
-      await memoViewServiceClient.createMemoView({
+      await userServiceClient.createMemoView({
         parent: user.name,
-        memoView: { name: "", title: draft.title, filter: draft.filter },
+        memoView: { name: "", title: draft.title, filter: draft.filter, icon: draft.icon },
         validateOnly: true,
       });
       validateState.setFinish();
@@ -359,9 +381,9 @@ const MemoViews = () => {
 
     try {
       createState.setLoading();
-      await memoViewServiceClient.createMemoView({
+      await userServiceClient.createMemoView({
         parent: user.name,
-        memoView: { name: "", title: draft.title, filter: draft.filter },
+        memoView: { name: "", title: draft.title, filter: draft.filter, icon: draft.icon },
       });
       await queryClient.invalidateQueries({ queryKey: userKeys.memoViews(user.name) });
       createState.setFinish();
@@ -384,9 +406,9 @@ const MemoViews = () => {
 
     try {
       updateState.setLoading();
-      await memoViewServiceClient.updateMemoView({
+      await userServiceClient.updateMemoView({
         memoView: draft,
-        updateMask: create(FieldMaskSchema, { paths: ["title", "filter"] }),
+        updateMask: create(FieldMaskSchema, { paths: ["title", "filter", "icon"] }),
       });
       await queryClient.invalidateQueries({ queryKey: userKeys.memoViews(user?.name) });
       updateState.setFinish();
@@ -414,7 +436,7 @@ const MemoViews = () => {
     if (!deleteTarget) return;
 
     try {
-      await memoViewServiceClient.deleteMemoView({ name: deleteTarget.name });
+      await userServiceClient.deleteMemoView({ name: deleteTarget.name });
       await queryClient.invalidateQueries({ queryKey: userKeys.memoViews(user?.name) });
       if (selectedMemoView === getMemoViewId(deleteTarget.name)) setMemoView(undefined);
       toast.success(t("setting.memo-view.delete-success", { title: deleteTarget.title }));
@@ -450,6 +472,7 @@ const MemoViews = () => {
       <div className={cn("grid grid-cols-1 gap-6", isCreateFormOpen && "xl:grid-cols-[minmax(0,1fr)_20rem]")}>
         <div className="flex min-w-0 flex-col gap-6">
           <div
+            inert={!isCreateFormOpen}
             className={cn(
               "overflow-hidden rounded-lg border border-border bg-background transition-[max-height,opacity] duration-200",
               isCreateFormOpen ? "max-h-[48rem] opacity-100" : "max-h-0 border-transparent opacity-0",
@@ -475,15 +498,21 @@ const MemoViews = () => {
               <div className="grid gap-4">
                 <div className="grid gap-2">
                   <Label htmlFor="view-title">{t("common.title")}</Label>
-                  <Input
-                    id="view-title"
-                    value={draft.title}
-                    placeholder="Pinned, Recent notes, Work"
-                    onChange={(event) => setDraftState({ title: event.target.value })}
-                  />
-                  <p className="text-xs leading-5 text-muted-foreground">
-                    Prefix the title with an emoji if you want it to appear in the sidebar.
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <CustomIconPicker
+                      value={draft.icon}
+                      onChange={(icon) => setDraftState({ icon: icon ? create(MemoView_IconSchema, icon) : undefined })}
+                      label={t("setting.memo-view.change-icon")}
+                      fallback={ParenthesesIcon}
+                      disabled={isSaving}
+                    />
+                    <Input
+                      id="view-title"
+                      value={draft.title}
+                      placeholder="Pinned, Recent notes, Work"
+                      onChange={(event) => setDraftState({ title: event.target.value })}
+                    />
+                  </div>
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="view-filter">{t("common.filter")}</Label>
@@ -519,51 +548,69 @@ const MemoViews = () => {
             </div>
           </div>
 
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold text-foreground">All views</h2>
-              <Badge variant="outline">{memoViews.length}</Badge>
-            </div>
+          {!(memoViews.length === 0 && isCreateFormOpen) && (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-semibold text-foreground">All views</h2>
+                {!isPending && !isError && <Badge variant="outline">{memoViews.length}</Badge>}
+              </div>
 
-            {memoViews.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border px-4 py-10 text-center">
-                <p className="text-sm font-medium text-foreground">No views yet</p>
-                <p className="mt-1 text-sm text-muted-foreground">Open the create form to choose an example and add your first view.</p>
-              </div>
-            ) : (
-              <div className="divide-y divide-border overflow-hidden rounded-lg border border-border">
-                {memoViews.map((memoView) => (
-                  <div
-                    key={memoView.name}
-                    className="grid gap-3 bg-background px-4 py-3 sm:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)_2rem]"
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-foreground">{memoView.title}</div>
-                      <div className="mt-1 font-mono text-xs text-muted-foreground">{getMemoViewId(memoView.name)}</div>
+              {isPending ? (
+                <p className="py-10 text-center text-sm text-muted-foreground">Loading views…</p>
+              ) : isError ? (
+                <div className="py-10 text-center">
+                  <p className="text-sm text-muted-foreground">Couldn’t load views.</p>
+                  <Button variant="outline" className="mt-4" onClick={() => void refetch()}>
+                    Retry
+                  </Button>
+                </div>
+              ) : memoViews.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-border px-4 py-10 text-center">
+                  <p className="text-sm font-medium text-foreground">No views yet</p>
+                  <p className="mt-1 text-sm text-muted-foreground">Save a filter to quickly return to the memos you need.</p>
+                  <Button variant="outline" className="mt-4" onClick={handleOpenCreateForm}>
+                    <PlusIcon className="size-4" />
+                    {t("setting.memo-view.create")}
+                  </Button>
+                </div>
+              ) : (
+                <div className="divide-y divide-border overflow-hidden rounded-lg border border-border">
+                  {memoViews.map((memoView) => (
+                    <div
+                      key={memoView.name}
+                      className="grid gap-3 bg-background px-4 py-3 sm:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)_2rem]"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                          <MemoViewIcon icon={memoView.icon} className="size-4 text-base" />
+                          <span className="truncate">{memoView.title}</span>
+                        </div>
+                        <div className="mt-1 font-mono text-xs text-muted-foreground">{getMemoViewId(memoView.name)}</div>
+                      </div>
+                      <pre className="min-w-0 overflow-x-auto rounded-md bg-muted/50 px-3 py-2 font-mono text-xs leading-5 text-muted-foreground">
+                        {memoView.filter}
+                      </pre>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger render={<Button variant="ghost" size="icon" className="justify-self-end" />}>
+                          <MoreVerticalIcon className="h-4 w-4" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => handleEditMemoView(memoView)}>
+                            <PencilIcon className="h-4 w-4" />
+                            {t("common.edit")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setDeleteTarget(memoView)}>
+                            <Trash2Icon className="h-4 w-4" />
+                            {t("common.delete")}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
-                    <pre className="min-w-0 overflow-x-auto rounded-md bg-muted/50 px-3 py-2 font-mono text-xs leading-5 text-muted-foreground">
-                      {memoView.filter}
-                    </pre>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger render={<Button variant="ghost" size="icon" className="justify-self-end" />}>
-                        <MoreVerticalIcon className="h-4 w-4" />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => handleEditMemoView(memoView)}>
-                          <PencilIcon className="h-4 w-4" />
-                          {t("common.edit")}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setDeleteTarget(memoView)}>
-                          <Trash2Icon className="h-4 w-4" />
-                          {t("common.delete")}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {isCreateFormOpen ? <MemoViewGuide onUseExample={handleUseExample} /> : null}

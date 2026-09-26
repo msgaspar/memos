@@ -1,18 +1,24 @@
 import { ExternalLinkIcon, ScissorsIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useInstance } from "@/contexts/InstanceContext";
-import { WEB_CLIPPER_URL } from "@/lib/constants";
+import {
+  MEMOS_API_DOCUMENTATION_URL,
+  MEMOS_DOCUMENTATION_URL,
+  MEMOS_GITHUB_URL,
+  MEMOS_WEBSITE_URL,
+  WEB_CLIPPER_URL,
+} from "@/lib/constants";
+import { getReleaseTag } from "@/lib/release-version";
 import { useTranslate } from "@/utils/i18n";
 
 const GITHUB_COMMIT_URL_PREFIX = "https://github.com/usememos/memos/commit/";
-const GITHUB_RELEASE_URL_PREFIX = "https://github.com/usememos/memos/releases/tag/v";
+const GITHUB_RELEASE_URL_PREFIX = "https://github.com/usememos/memos/releases/tag/";
 
 const DEFAULT_TITLE = "Memos";
 const DEFAULT_TAGLINE = "Capture first. Keep it yours.";
 const DEFAULT_LOGO = "/logo.webp";
 
 const isCommitSha = (commit: string) => /^[0-9a-f]{7,40}$/i.test(commit);
-const isSemver = (version: string) => /^\d+\.\d+\.\d+/.test(version);
 
 const Chip = ({ href, children }: { href?: string; children: React.ReactNode }) => {
   const className = "inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 font-mono text-xs text-muted-foreground";
@@ -40,9 +46,9 @@ const About = () => {
   const instanceLogo = customProfile?.logoUrl || DEFAULT_LOGO;
   const isCustomBranded = instanceTitle !== DEFAULT_TITLE;
 
-  const hasSemver = isSemver(profile.version);
-  const releaseUrl = hasSemver ? `${GITHUB_RELEASE_URL_PREFIX}${profile.version}` : "";
-  const versionLabel = hasSemver ? `v${profile.version}` : profile.version;
+  const releaseTag = getReleaseTag(profile.version);
+  const releaseUrl = releaseTag ? `${GITHUB_RELEASE_URL_PREFIX}${releaseTag}` : "";
+  const versionLabel = releaseTag ?? profile.version;
   const hasCommitSha = isCommitSha(profile.commit);
   const commitUrl = hasCommitSha ? `${GITHUB_COMMIT_URL_PREFIX}${profile.commit}` : "";
   const shortCommit = hasCommitSha ? profile.commit.slice(0, 7) : "";
@@ -63,13 +69,13 @@ const About = () => {
   }
 
   const projectLinks = [
-    { label: t("about.official-website"), note: t("about.official-website-note"), href: "https://usememos.com/" },
-    { label: t("about.documents"), note: t("about.documents-note"), href: "https://usememos.com/docs" },
-    { label: t("about.api-docs"), note: t("about.api-docs-note"), href: "https://usememos.com/docs/api" },
+    { label: t("about.official-website"), note: t("about.official-website-note"), href: MEMOS_WEBSITE_URL },
+    { label: t("about.documents"), note: t("about.documents-note"), href: MEMOS_DOCUMENTATION_URL },
+    { label: t("about.api-docs"), note: t("about.api-docs-note"), href: MEMOS_API_DOCUMENTATION_URL },
     {
       label: t("about.github-repository"),
       note: t("about.github-repository-note"),
-      href: "https://github.com/usememos/memos",
+      href: MEMOS_GITHUB_URL,
     },
     { label: t("about.web-clipper"), note: t("about.web-clipper-platforms"), href: WEB_CLIPPER_URL, icon: ScissorsIcon },
   ];

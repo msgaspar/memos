@@ -1,8 +1,13 @@
 import { ExternalLinkIcon } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
+import { createMemoNavigationState } from "@/components/MemoView/navigation";
+import UserAvatar from "@/components/UserAvatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { extractUsernameFromName } from "@/lib/resource-names";
 import { cn } from "@/lib/utils";
+import { getCreatorHomePath } from "@/router/routes";
+import type { User } from "@/types/proto/api/v1/user_service_pb";
 import { useTranslate } from "@/utils/i18n";
 
 interface AttachmentMetadataLineProps {
@@ -19,6 +24,29 @@ interface AttachmentOpenButtonProps {
   className?: string;
   href: string;
 }
+
+interface AttachmentCreatorProps {
+  creatorName?: string;
+  user?: User;
+}
+
+export const AttachmentCreator = ({ creatorName, user }: AttachmentCreatorProps) => {
+  if (!creatorName) return null;
+
+  const username = user?.username || extractUsernameFromName(creatorName);
+  const displayName = user?.displayName || username;
+
+  return (
+    <Link
+      to={getCreatorHomePath(username)}
+      className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-sm text-xs text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      viewTransition
+    >
+      <UserAvatar className="size-4 rounded-[4px]" avatarUrl={user?.avatarUrl} name={displayName} />
+      <span className="truncate">{displayName}</span>
+    </Link>
+  );
+};
 
 export const AttachmentMetadataLine = ({ className, items }: AttachmentMetadataLineProps) => {
   const visibleItems = items.filter((item): item is string => Boolean(item));
@@ -48,6 +76,7 @@ export const AttachmentSourceChip = ({
   memoName,
   unlinkedLabelKey = "attachment-library.labels.not-linked",
 }: AttachmentSourceChipProps) => {
+  const location = useLocation();
   const t = useTranslate();
 
   if (!memoName) {
@@ -61,6 +90,7 @@ export const AttachmentSourceChip = ({
   return (
     <Link
       to={`/${memoName}`}
+      state={createMemoNavigationState(`${location.pathname}${location.search}`)}
       className="inline-flex max-w-full items-center truncate rounded-full border border-border/60 bg-muted/30 px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted/50"
     >
       <span className="truncate">{t("attachment-library.labels.memo")}</span>

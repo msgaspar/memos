@@ -1,7 +1,8 @@
 import { useDirection } from "@base-ui/react/direction-provider";
-import { Columns2Icon, Columns3Icon, InfinityIcon, type LucideIcon, Rows3Icon, SlidersHorizontalIcon } from "lucide-react";
-import type { ReactNode } from "react";
-import { SIDEBAR_SECTION_ACTION_BUTTON_CLASSES, SIDEBAR_SECTION_ACTION_ICON_CLASSES } from "@/components/AppSidebar/SidebarSection";
+import { ChevronDownIcon, Columns2Icon, Columns3Icon, InfinityIcon, type LucideIcon, Rows3Icon } from "lucide-react";
+import type { ReactNode, RefObject } from "react";
+import { SIDEBAR_SECTION_ACTION_ICON_CLASSES } from "@/components/AppSidebar/SidebarSection";
+import { buttonVariants } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -11,7 +12,7 @@ import { useTranslate } from "@/utils/i18n";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
 interface Props {
-  className?: string;
+  anchor?: RefObject<HTMLElement | null>;
 }
 
 interface SettingRowProps {
@@ -31,9 +32,9 @@ const LAYOUT_OPTIONS: Record<MemoMaxColumns, { icon: LucideIcon; key: "layout-li
 };
 
 const SettingRow = ({ label, description, children }: SettingRowProps) => (
-  <div className="flex min-h-7 items-center justify-between gap-3">
+  <div className="flex min-h-6 items-center justify-between gap-2">
     <div className="min-w-0">
-      <p className="text-[13px] leading-5 text-foreground">{label}</p>
+      <p className="text-xs leading-4 text-foreground">{label}</p>
       {description && <p className="text-[11px] leading-4 text-muted-foreground">{description}</p>}
     </div>
     {children}
@@ -70,12 +71,11 @@ function MemoDisplaySettingsContent() {
 
   return (
     <div>
-      <section className="px-3 py-2.5">
-        <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-foreground/65">{t("memo.layout")}</p>
+      <section className="p-1.5">
         <div
           role="radiogroup"
           aria-label={t("memo.layout")}
-          className="grid grid-cols-4 gap-0.5 rounded-lg bg-muted/55 p-0.5"
+          className="grid grid-cols-4 gap-0.5"
           onKeyDown={(event) => {
             const delta =
               event.key === "ArrowRight"
@@ -117,8 +117,8 @@ function MemoDisplaySettingsContent() {
                 data-value={value}
                 onClick={() => setMaxColumns(value)}
                 className={cn(
-                  "flex h-8 min-w-0 items-center justify-center gap-1 rounded-md px-1 text-[11px] transition-[background-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-                  active ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
+                  "flex h-6 min-w-0 items-center justify-center gap-1 rounded-sm px-1 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                  active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                 )}
               >
                 <Icon className="size-3.5 shrink-0" strokeWidth={1.8} />
@@ -129,15 +129,14 @@ function MemoDisplaySettingsContent() {
         </div>
       </section>
 
-      <section className="space-y-2 border-t border-border/60 px-3 py-2.5">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-foreground/65">{t("memo.order")}</p>
+      <section className="space-y-1 border-t border-border/60 px-2.5 py-2">
         <SettingRow label={t("memo.order-by")}>
           <Select
             value={timeBasis}
             items={timeBasisOptions}
             onValueChange={(value) => setTimeBasis(value === "update_time" ? "update_time" : "create_time")}
           >
-            <SelectTrigger size="sm" className="w-32" aria-label={t("memo.order-by")}>
+            <SelectTrigger size="xs" className="w-32" aria-label={t("memo.order-by")}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -155,7 +154,7 @@ function MemoDisplaySettingsContent() {
             items={sortOrderOptions}
             onValueChange={(value) => setOrderByTimeAsc(value === "asc")}
           >
-            <SelectTrigger size="sm" className="w-32" aria-label={t("memo.direction")}>
+            <SelectTrigger size="xs" className="w-32" aria-label={t("memo.direction")}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -169,7 +168,7 @@ function MemoDisplaySettingsContent() {
         </SettingRow>
       </section>
 
-      <section className="space-y-2 border-t border-border/60 px-3 py-2.5">
+      <section className="space-y-1 border-t border-border/60 px-2.5 py-2">
         <SettingRow label={t("memo.compact-mode")} description={compactLocked ? t("memo.grid-compact-hint") : undefined}>
           <Switch
             aria-label={t("memo.compact-mode")}
@@ -186,31 +185,29 @@ function MemoDisplaySettingsContent() {
   );
 }
 
-function MemoDisplaySettingMenu({ className }: Props) {
+function MemoDisplaySettingMenu({ anchor }: Props) {
   const t = useTranslate();
+  const label = `${t("common.timeline")} · ${t("memo.view-options")}`;
 
   return (
     <Popover>
       <Tooltip>
-        <TooltipTrigger render={<span className="inline-flex" />}>
-          <PopoverTrigger
-            aria-label={t("memo.view-options")}
-            className={cn(
-              "flex items-center justify-center",
-              SIDEBAR_SECTION_ACTION_BUTTON_CLASSES,
-              "data-popup-open:bg-sidebar-accent data-popup-open:text-foreground",
-              className,
-            )}
-          >
-            <SlidersHorizontalIcon className={SIDEBAR_SECTION_ACTION_ICON_CLASSES} strokeWidth={1.8} />
-          </PopoverTrigger>
+        <TooltipTrigger
+          render={
+            <PopoverTrigger
+              aria-label={label}
+              className={cn(
+                buttonVariants({ variant: "quiet", size: "icon-compact" }),
+                "w-auto rounded-s-none px-1.5 hover:bg-sidebar-accent data-popup-open:[&_svg]:rotate-180",
+              )}
+            />
+          }
+        >
+          <ChevronDownIcon className={cn(SIDEBAR_SECTION_ACTION_ICON_CLASSES, "transition-transform")} strokeWidth={1.8} />
         </TooltipTrigger>
-        <TooltipContent side="top">{t("memo.view-options")}</TooltipContent>
+        <TooltipContent side="bottom">{label}</TooltipContent>
       </Tooltip>
-      <PopoverContent align="end" sideOffset={6} className="w-64 p-0">
-        <div className="border-b border-border/60 px-3 py-2.5">
-          <p className="text-[13px] font-medium text-foreground">{t("memo.view-options")}</p>
-        </div>
+      <PopoverContent anchor={anchor} align="start" sideOffset={6} aria-label={label} className="w-56 p-0">
         <MemoDisplaySettingsContent />
       </PopoverContent>
     </Popover>

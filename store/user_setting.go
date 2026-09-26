@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"github.com/pkg/errors"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -170,7 +171,10 @@ func (s *Store) AddUserRefreshToken(ctx context.Context, userID int32, token *st
 		return err
 	}
 
-	tokens = append(tokens, token)
+	// Expired tokens can never authenticate again; drop them here so the
+	// list is bounded by the tokens issued within one lifetime rather than
+	// by every sign-in the account ever made.
+	tokens = append(pruneExpiredRefreshTokens(tokens, time.Now()), token)
 
 	_, err = s.UpsertUserSetting(ctx, &storepb.UserSetting{
 		UserId: userID,
@@ -179,6 +183,43 @@ func (s *Store) AddUserRefreshToken(ctx context.Context, userID int32, token *st
 			RefreshTokens: &storepb.RefreshTokensUserSetting{
 				RefreshTokens: tokens,
 			},
+		},
+	})
+	return err
+}
+
+func pruneExpiredRefreshTokens(tokens []*storepb.RefreshTokensUserSetting_RefreshToken, now time.Time) []*storepb.RefreshTokensUserSetting_RefreshToken {
+	live := make([]*storepb.RefreshTokensUserSetting_RefreshToken, 0, len(tokens))
+	for _, token := range tokens {
+		if token == nil || (token.ExpiresAt != nil && token.ExpiresAt.AsTime().Before(now)) {
+			continue
+		}
+		live = append(live, token)
+	}
+	return live
+}
+
+// RemoveUserRefreshTokensExcept revokes every refresh token of the user other
+// than keepTokenID. An empty keepTokenID revokes all of them.
+func (s *Store) RemoveUserRefreshTokensExcept(ctx context.Context, userID int32, keepTokenID string) error {
+	s.refreshTokenMu.Lock()
+	defer s.refreshTokenMu.Unlock()
+
+	existingTokens, err := s.GetUserRefreshTokens(ctx, userID)
+	if err != nil {
+		return err
+	}
+	kept := make([]*storepb.RefreshTokensUserSetting_RefreshToken, 0, 1)
+	for _, token := range existingTokens {
+		if keepTokenID != "" && token.TokenId == keepTokenID {
+			kept = append(kept, token)
+		}
+	}
+	_, err = s.UpsertUserSetting(ctx, &storepb.UserSetting{
+		UserId: userID,
+		Key:    storepb.UserSetting_REFRESH_TOKENS,
+		Value: &storepb.UserSetting_RefreshTokens{
+			RefreshTokens: &storepb.RefreshTokensUserSetting{RefreshTokens: kept},
 		},
 	})
 	return err
@@ -495,6 +536,7 @@ func (s *Store) AddUserMemoView(ctx context.Context, userID int32, memoView *sto
 }
 
 // UpdateUserMemoView applies the non-nil field updates to the memo view carrying the same ID.
+// A non-nil icon update containing nil resets the icon.
 // It returns nil when no matching memo view is found.
 func (s *Store) UpdateUserMemoView(
 	ctx context.Context,
@@ -502,6 +544,7 @@ func (s *Store) UpdateUserMemoView(
 	memoViewID string,
 	title *string,
 	filter *string,
+	icon **storepb.MemoViewsUserSetting_MemoView_Icon,
 ) (*storepb.MemoViewsUserSetting_MemoView, error) {
 	s.memoViewMu.Lock()
 	defer s.memoViewMu.Unlock()
@@ -519,16 +562,15 @@ func (s *Store) UpdateUserMemoView(
 			continue
 		}
 
-		updatedMemoView = &storepb.MemoViewsUserSetting_MemoView{
-			Id:     item.GetId(),
-			Title:  item.GetTitle(),
-			Filter: item.GetFilter(),
-		}
+		updatedMemoView = proto.CloneOf(item)
 		if title != nil {
 			updatedMemoView.Title = *title
 		}
 		if filter != nil {
 			updatedMemoView.Filter = *filter
+		}
+		if icon != nil {
+			updatedMemoView.Icon = proto.CloneOf(*icon)
 		}
 		memoViews = append(memoViews, updatedMemoView)
 	}

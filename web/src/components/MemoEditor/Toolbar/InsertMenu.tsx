@@ -35,14 +35,7 @@ const InsertMenu = (props: InsertMenuProps) => {
   const t = useTranslate();
   const { actions, dispatch, getState } = useEditorContext();
   const relations = useEditorSelector((s) => s.metadata.relations);
-  const {
-    location: initialLocation,
-    onLocationChange,
-    onToggleFocusMode,
-    onToggleFormattingToolbar,
-    isFormattingToolbarVisible,
-    isUploading: isUploadingProp,
-  } = props;
+  const { location: initialLocation, onLocationChange, viewToggles, isUploading: isUploadingProp } = props;
 
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   const [locationDialogOpen, setLocationDialogOpen] = useState(false);
@@ -159,27 +152,38 @@ const InsertMenu = (props: InsertMenuProps) => {
   return (
     <>
       <DropdownMenu>
-        <DropdownMenuTrigger render={<Button variant="secondary" size="icon" disabled={insertionDisabled} aria-label={t("common.add")} />}>
-          {isUploading ? <LoaderIcon className="size-4 animate-spin" /> : <PlusIcon className="size-4" />}
+        <DropdownMenuTrigger
+          render={<Button variant="outline" size="icon-compact" disabled={insertionDisabled} aria-label={t("common.add")} />}
+        >
+          {isUploading ? (
+            <LoaderIcon className="size-4 animate-spin" strokeWidth={1.8} />
+          ) : (
+            <PlusIcon className="size-4" strokeWidth={1.8} />
+          )}
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
+        <DropdownMenuContent align="start" size="sm">
           {insertItems.map((item) => (
             <DropdownMenuItem key={item.key} onClick={item.onClick} disabled={props.isSaving}>
-              <item.icon className="w-4 h-4" />
+              <item.icon />
               {item.label}
             </DropdownMenuItem>
           ))}
-          <DropdownMenuSeparator />
-          {/* View toggles: focus mode + formatting-toolbar visibility. */}
-          <DropdownMenuItem onClick={onToggleFocusMode}>
-            <Maximize2Icon className="w-4 h-4" />
-            {t("editor.focus-mode")}
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={onToggleFormattingToolbar}>
-            <TypeIcon className="w-4 h-4" />
-            {t("editor.formatting-toolbar")}
-            {isFormattingToolbarVisible && <CheckIcon className="w-4 h-4 ml-auto" />}
-          </DropdownMenuItem>
+          {/* View toggles: focus mode + formatting-toolbar visibility. Absent
+              when a host owns the editor's presentation — neither applies there. */}
+          {viewToggles && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={viewToggles.onToggleFocusMode}>
+                <Maximize2Icon />
+                {t("editor.focus-mode")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={viewToggles.onToggleFormattingToolbar}>
+                <TypeIcon />
+                {t("editor.formatting-toolbar")}
+                {viewToggles.isFormattingToolbarVisible && <CheckIcon className="ms-auto size-3.5" />}
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
 
