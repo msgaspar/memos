@@ -3,11 +3,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import MemoActionMenu from "@/components/MemoActionMenu";
-import { State } from "@/types/proto/api/v1/common_pb";
-import { type Memo, MemoSchema } from "@/types/proto/api/v1/memo_service_pb";
+import { State } from "@/types/proto/api/common_pb";
+import { type Memo, MemoSchema } from "@/types/proto/api/memo_service_pb";
 
 const handlers = vi.hoisted(() => ({
-  canMove: true,
   isInMemoDetailPage: false,
   handleTogglePinMemoBtnClick: vi.fn(),
   handleEditMemoClick: vi.fn(),
@@ -22,10 +21,6 @@ const handlers = vi.hoisted(() => ({
 
 vi.mock("@/components/ConfirmDialog", () => ({
   default: () => null,
-}));
-
-vi.mock("@/components/MemoActionMenu/MemoMoveDialog", () => ({
-  default: () => <div role="dialog" aria-label="Move to Space" />,
 }));
 
 vi.mock("@/components/MemoActionMenu/hooks", () => ({
@@ -64,26 +59,14 @@ const memoOf = (fields: Parameters<typeof create<typeof MemoSchema>>[1] = {}) =>
 describe("MemoActionMenu", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    handlers.canMove = false;
     handlers.isInMemoDetailPage = false;
   });
 
-  it("orders an owner's memo actions and puts Delete last when Move does not apply", async () => {
-    await openMenu(memoOf());
-    expect(menuItemLabels()).toEqual(["common.open", "common.edit", "common.pin", "common.archive", "common.copy", "common.delete"]);
+  it("groups an owner's memo actions by what they do to the card and puts Delete last, with no Move entry", async () => {
+    await openMenu(memoOf({ space: "spaces/work" }));
+    expect(menuItemLabels()).toEqual(["common.edit", "common.pin", "common.archive", "common.open", "common.copy", "common.delete"]);
     const separators = screen.getAllByRole("separator");
     expect(separators[separators.length - 1].nextElementSibling).toBe(screen.getByRole("menuitem", { name: "common.delete" }));
-  });
-
-  it.each(["move", "delete"])("keeps Move and Delete together under More when Move applies (%s)", async (action) => {
-    handlers.canMove = true;
-    await openMenu(memoOf());
-    expect(menuItemLabels()).toEqual(["common.open", "common.edit", "common.pin", "common.archive", "common.copy", "common.more"]);
-
-    fireEvent.click(screen.getByRole("menuitem", { name: "common.more" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: action === "move" ? "memo.move.title" : "common.delete" }));
-    if (action === "move") expect(await screen.findByRole("dialog", { name: "Move to Space" })).toBeInTheDocument();
-    else expect(handlers.handleDeleteMemoClick).toHaveBeenCalledOnce();
   });
 
   it("offers Unpin on a pinned memo", async () => {
@@ -105,15 +88,15 @@ describe("MemoActionMenu", () => {
   it("hides Open on the memo's own page", async () => {
     handlers.isInMemoDetailPage = true;
     await openMenu(memoOf());
-    expect(menuItemLabels()[0]).toBe("common.edit");
+    expect(menuItemLabels()).toEqual(["common.edit", "common.pin", "common.archive", "common.copy", "common.delete"]);
   });
 
   it.each([
     [true, "memo.task-actions.check-all", "handleCheckAllTaskListItemsClick"],
     [false, "memo.task-actions.uncheck-all", "handleUncheckAllTaskListItemsClick"],
-  ] as const)("shows one task action after Archive (open tasks: %s)", async (hasIncompleteTasks, label, handler) => {
+  ] as const)("shows one task action right after Edit (open tasks: %s)", async (hasIncompleteTasks, label, handler) => {
     await openMenu(memoOf({ property: { hasTaskList: true, hasIncompleteTasks } }));
-    expect(menuItemLabels().slice(3, 5)).toEqual(["common.archive", label]);
+    expect(menuItemLabels().slice(0, 3)).toEqual(["common.edit", label, "common.pin"]);
     fireEvent.click(screen.getByRole("menuitem", { name: label }));
     expect(handlers[handler]).toHaveBeenCalledOnce();
   });
@@ -129,7 +112,6 @@ describe("MemoActionMenu", () => {
   });
 
   it("offers only Restore and Delete on an archived memo", async () => {
-    handlers.canMove = true;
     render(
       <MemoryRouter>
         <MemoActionMenu memo={memoOf({ state: State.ARCHIVED, property: { hasTaskList: true } })} />
@@ -171,11 +153,11 @@ describe("MemoActionMenu", () => {
     );
 
     const trigger = screen.getByRole("button", { name: "common.more" });
-    expect(trigger).toHaveClass("size-6", "rounded-md", "text-muted-foreground/70", "hover:bg-muted/60", "data-popup-open:bg-accent");
+    expect(trigger).toHaveClass("mu-button", "mu-button-ghost", "mu-button-icon", "mu-s-sm");
     expect(trigger.className).not.toMatch(/ring-/);
     expect(trigger).toHaveAttribute("aria-haspopup", "menu");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
-    expect(trigger.querySelector(".lucide-ellipsis-vertical")).toHaveClass("size-4");
+    expect(trigger.querySelector(".lucide-ellipsis-vertical")).not.toBeNull();
 
     fireEvent.click(trigger);
 

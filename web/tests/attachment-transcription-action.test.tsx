@@ -2,7 +2,7 @@ import { create } from "@bufbuild/protobuf";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import AttachmentListEditor from "@/components/MemoMetadata/Attachment/AttachmentListEditor";
-import { AttachmentSchema } from "@/types/proto/api/v1/attachment_service_pb";
+import { AttachmentSchema } from "@/types/proto/api/attachment_service_pb";
 
 const audio = create(AttachmentSchema, { name: "attachments/voice", filename: "voice.wav", type: "audio/wav" });
 
@@ -36,7 +36,8 @@ describe("attachment transcription action", () => {
         onAttachmentsChange={vi.fn()}
       />,
     );
-    expect(screen.getByRole("button", { name: "Transcribing..." })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Transcribing..." })).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("button", { name: "Transcribing..." })).toHaveAttribute("aria-disabled", "true");
     expect(screen.queryByRole("button", { name: "Remove attachment" })).not.toBeInTheDocument();
     expect(screen.getByText("voice.wav")).toBeInTheDocument();
   });

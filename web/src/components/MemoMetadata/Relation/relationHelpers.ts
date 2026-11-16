@@ -1,5 +1,5 @@
-import type { MemoRelation } from "@/types/proto/api/v1/memo_service_pb";
-import { MemoRelation_Type } from "@/types/proto/api/v1/memo_service_pb";
+import type { MemoRelation } from "@/types/proto/api/memo_service_pb";
+import { MemoRelation_Type } from "@/types/proto/api/memo_service_pb";
 
 export type RelationDirection = "referencing" | "referenced";
 
@@ -40,3 +40,15 @@ export const getRelationMemo = (relation: MemoRelation, direction: RelationDirec
 export const getRelationMemoName = (relation: MemoRelation, direction: RelationDirection): string => {
   return getRelationMemo(relation, direction)?.name ?? "";
 };
+
+/** The links that point to this memo, shown read-only while it's edited. */
+export const getEditorBacklinkRelations = (relations: MemoRelation[], memoName?: string): MemoRelation[] =>
+  memoName ? getRelationBuckets(relations, memoName).referenced : [];
+
+/** A related memo's date on its row: month and day, with the year when it isn't this year. */
+export const formatRelationDate = (date: Date, locale: string): string =>
+  date.toLocaleDateString(locale, {
+    month: "short",
+    day: "numeric",
+    year: date.getFullYear() === new Date().getFullYear() ? undefined : "numeric",
+  });

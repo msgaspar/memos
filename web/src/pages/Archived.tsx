@@ -4,8 +4,8 @@ import PagedMemoList, { getMemoKey } from "@/components/PagedMemoList";
 import { useMemoFilters, useMemoSorting } from "@/hooks";
 import useCurrentUser from "@/hooks/useCurrentUser";
 import { cn } from "@/lib/utils";
-import { State } from "@/types/proto/api/v1/common_pb";
-import { Memo } from "@/types/proto/api/v1/memo_service_pb";
+import { State } from "@/types/proto/api/common_pb";
+import { Memo } from "@/types/proto/api/memo_service_pb";
 import { useTranslate } from "@/utils/i18n";
 
 const Archived = () => {
@@ -33,8 +33,8 @@ const Archived = () => {
       filter={memoFilter}
       renderLeading={({ useGrid }) => (
         <header className={cn("flex items-center gap-2 px-1", !useGrid && "mb-4")}>
-          <ArchiveIcon className="size-5 text-muted-foreground" strokeWidth={1.8} />
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">{t("common.archived")}</h1>
+          <ArchiveIcon className="mu-icon size-5 text-mu-text-secondary" />
+          <h1 className="mu-heading text-mu-text">{t("common.archived")}</h1>
         </header>
       )}
     />

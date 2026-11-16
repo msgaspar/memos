@@ -1,0 +1,346 @@
+package test
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/usememos/memos/internal/profile"
+	"github.com/usememos/memos/internal/version"
+	apipb "github.com/usememos/memos/proto/gen/api"
+	"github.com/usememos/memos/server/api"
+	"github.com/usememos/memos/server/auth"
+	"github.com/usememos/memos/store"
+	"github.com/usememos/memos/store/db"
+)
+
+const (
+	benchmarkTopLevelMemoCount = 5000
+	benchmarkPageSize          = 16
+)
+
+type benchmarkService struct {
+	*TestService
+	hostUser          *store.User
+	authenticatedCtx  context.Context
+	publicCtx         context.Context
+	pageTenToken      string
+	commentParentName string
+}
+
+func newBenchmarkService(tb testing.TB) *benchmarkService {
+	tb.Helper()
+
+	ctx := context.Background()
+	testService := newTestingServiceForTB(tb)
+
+	hostUser, err := testService.CreateHostUser(ctx, "bench-host")
+	if err != nil {
+		tb.Fatalf("failed to create host user: %v", err)
+	}
+
+	commentParentName, err := seedListMemosBenchmarkData(ctx, testService.Store, hostUser)
+	if err != nil {
+		tb.Fatalf("failed to seed benchmark data: %v", err)
+	}
+
+	authenticatedCtx := context.WithValue(context.Background(), auth.UserIDContextKey, hostUser.ID)
+	pageTenToken, err := getListMemosPageToken(authenticatedCtx, testService.Service, 10, benchmarkPageSize)
+	if err != nil {
+		tb.Fatalf("failed to build page token: %v", err)
+	}
+
+	return &benchmarkService{
+		TestService:       testService,
+		hostUser:          hostUser,
+		authenticatedCtx:  authenticatedCtx,
+		publicCtx:         context.Background(),
+		pageTenToken:      pageTenToken,
+		commentParentName: commentParentName,
+	}
+}
+
+func newTestingServiceForTB(tb testing.TB) *TestService {
+	tb.Helper()
+
+	ctx := context.Background()
+	dataDir := tb.TempDir()
+	testProfile := getBenchmarkProfile(dataDir)
+	dbDriver, err := db.NewDBDriver(testProfile)
+	if err != nil {
+		tb.Fatalf("failed to create db driver: %v", err)
+	}
+
+	testStore := store.New(dbDriver, testProfile)
+	if err := testStore.Migrate(ctx); err != nil {
+		tb.Fatalf("failed to migrate db: %v", err)
+	}
+	tb.Cleanup(func() {
+		testStore.Close()
+	})
+
+	service := newServiceWithProfile(testProfile, testStore)
+	return &TestService{
+		Service: service,
+		Store:   testStore,
+		Profile: testProfile,
+		Secret:  service.Secret,
+	}
+}
+
+func getBenchmarkProfile(dataDir string) *profile.Profile {
+	return &profile.Profile{
+		Demo:        true,
+		Version:     version.GetCurrentVersion(),
+		InstanceURL: "http://localhost:8080",
+		Driver:      "sqlite",
+		DSN:         filepath.Join(dataDir, "bench.db"),
+		Data:        dataDir,
+	}
+}
+
+func newServiceWithProfile(testProfile *profile.Profile, testStore *store.Store) *api.APIService {
+	service := api.NewAPIService("bench-secret", testProfile, testStore)
+	return service
+}
+
+func seedListMemosBenchmarkData(ctx context.Context, stores *store.Store, hostUser *store.User) (string, error) {
+	topLevelMemos := make([]*store.Memo, 0, benchmarkTopLevelMemoCount)
+	commentParentName := ""
+
+	for i := range benchmarkTopLevelMemoCount {
+		visibility := store.Private
+		if i%4 == 0 {
+			visibility = store.Public
+		}
+		memo, err := stores.CreateMemo(ctx, &store.Memo{
+			UID:        fmt.Sprintf("memo-%06d", i),
+			CreatorID:  hostUser.ID,
+			Content:    benchmarkMemoContent(i),
+			Visibility: visibility,
+		})
+		if err != nil {
+			return "", err
+		}
+		topLevelMemos = append(topLevelMemos, memo)
+
+		if i%3 == 0 {
+			if _, err := stores.CreateAttachment(ctx, &store.Attachment{
+				UID:       fmt.Sprintf("att-%06d", i),
+				CreatorID: hostUser.ID,
+				Filename:  fmt.Sprintf("memo-%06d.png", i),
+				Type:      "image/png",
+				Size:      2048,
+				MemoID:    &memo.ID,
+			}); err != nil {
+				return "", err
+			}
+		}
+
+		if i%5 == 0 {
+			if _, err := stores.UpsertReaction(ctx, &store.Reaction{
+				CreatorID:    hostUser.ID,
+				MemoID:       memo.ID,
+				ReactionType: "thumbs-up",
+			}); err != nil {
+				return "", err
+			}
+		}
+	}
+
+	for i, memo := range topLevelMemos {
+		if i+1 < len(topLevelMemos) && i%4 == 0 {
+			if _, err := stores.UpsertMemoRelation(ctx, &store.MemoRelation{
+				MemoID:        memo.ID,
+				RelatedMemoID: topLevelMemos[i+1].ID,
+				Type:          store.MemoRelationReference,
+			}); err != nil {
+				return "", err
+			}
+		}
+
+		if i%6 == 0 {
+			_, err := stores.CreateMemoComment(ctx, &store.Memo{
+				UID:        fmt.Sprintf("comment-%06d", i),
+				CreatorID:  hostUser.ID,
+				Content:    fmt.Sprintf("Comment for memo %06d", i),
+				Visibility: store.Private,
+			}, memo.ID, hostUser.ID)
+			if err != nil {
+				return "", err
+			}
+			if commentParentName == "" {
+				commentParentName = "memos/" + memo.UID
+			}
+		}
+	}
+
+	return commentParentName, nil
+}
+
+func benchmarkMemoContent(i int) string {
+	return fmt.Sprintf("# Bench Memo %06d\n\nThis is benchmark memo %06d with enough content to exercise snippet generation.\n\n- task one\n- task two\n", i, i)
+}
+
+func getListMemosPageToken(ctx context.Context, service *api.APIService, page int, pageSize int32) (string, error) {
+	pageToken := ""
+	for range page - 1 {
+		resp, err := service.ListMemos(ctx, &apipb.ListMemosRequest{
+			PageSize:  pageSize,
+			PageToken: pageToken,
+		})
+		if err != nil {
+			return "", err
+		}
+		pageToken = resp.NextPageToken
+		if pageToken == "" {
+			break
+		}
+	}
+	return pageToken, nil
+}
+
+func BenchmarkListMemos(b *testing.B) {
+	bench := newBenchmarkService(b)
+
+	b.Run("authenticated_first_page", func(b *testing.B) {
+		req := &apipb.ListMemosRequest{PageSize: benchmarkPageSize}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			resp, err := bench.Service.ListMemos(bench.authenticatedCtx, req)
+			if err != nil {
+				b.Fatalf("ListMemos failed: %v", err)
+			}
+			if len(resp.Memos) == 0 {
+				b.Fatal("expected memos in authenticated benchmark response")
+			}
+		}
+	})
+
+	b.Run("authenticated_page_ten", func(b *testing.B) {
+		req := &apipb.ListMemosRequest{PageSize: benchmarkPageSize, PageToken: bench.pageTenToken}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			resp, err := bench.Service.ListMemos(bench.authenticatedCtx, req)
+			if err != nil {
+				b.Fatalf("ListMemos failed: %v", err)
+			}
+			if len(resp.Memos) == 0 {
+				b.Fatal("expected memos in paged benchmark response")
+			}
+		}
+	})
+
+	b.Run("public_first_page", func(b *testing.B) {
+		req := &apipb.ListMemosRequest{PageSize: benchmarkPageSize}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			resp, err := bench.Service.ListMemos(bench.publicCtx, req)
+			if err != nil {
+				b.Fatalf("ListMemos failed: %v", err)
+			}
+			if len(resp.Memos) == 0 {
+				b.Fatal("expected memos in public benchmark response")
+			}
+		}
+	})
+
+	// The attachment filters check attachment.memo_id once per candidate memo.
+	for _, filter := range []string{"has_attachments", "has_image"} {
+		b.Run("authenticated_"+filter, func(b *testing.B) {
+			req := &apipb.ListMemosRequest{PageSize: benchmarkPageSize, Filter: filter}
+			resp, err := bench.Service.ListMemos(bench.authenticatedCtx, req)
+			require.NoError(b, err)
+			require.Len(b, resp.Memos, benchmarkPageSize)
+			for i, memo := range resp.Memos {
+				require.Equal(b, fmt.Sprintf("memos/memo-%06d", (benchmarkTopLevelMemoCount-1)/3*3-i*3), memo.Name)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				resp, err := bench.Service.ListMemos(bench.authenticatedCtx, req)
+				if err != nil {
+					b.Fatalf("ListMemos failed: %v", err)
+				}
+				if len(resp.Memos) == 0 {
+					b.Fatalf("expected memos in %s benchmark response", filter)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkListMemoCommentsPreview(b *testing.B) {
+	bench := newBenchmarkService(b)
+	if bench.commentParentName == "" {
+		b.Fatal("expected seeded memo with comments")
+	}
+
+	req := &apipb.ListMemoCommentsRequest{
+		Parent:   bench.commentParentName,
+		PageSize: 3,
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		resp, err := bench.Service.ListMemoComments(bench.authenticatedCtx, req)
+		if err != nil {
+			b.Fatalf("ListMemoComments failed: %v", err)
+		}
+		if len(resp.Comments) == 0 {
+			b.Fatal("expected comments in benchmark response")
+		}
+	}
+}
+
+// BenchmarkListMemosLargeAttachments exercises SQLite overflow pages with real
+// database blobs while only the attachment lookup index is needed by filters.
+func BenchmarkListMemosLargeAttachments(b *testing.B) {
+	ctx := context.Background()
+	ts := newTestingServiceForTB(b)
+	owner, err := ts.CreateHostUser(ctx, "blob-bench")
+	require.NoError(b, err)
+	ownerCtx := ts.CreateUserContext(ctx, owner.ID)
+	blob := make([]byte, 256<<10)
+	const memoCount = 2000
+	for i := range memoCount {
+		memo, err := ts.Store.CreateMemo(ctx, &store.Memo{
+			UID: fmt.Sprintf("blob-%06d", i), CreatorID: owner.ID,
+			Content: "attachment benchmark", Visibility: store.Private,
+		})
+		require.NoError(b, err)
+		if i%5 == 0 {
+			_, err = ts.Store.CreateAttachment(ctx, &store.Attachment{
+				UID: fmt.Sprintf("blob-att-%06d", i), CreatorID: owner.ID, MemoID: &memo.ID,
+				Type: "image/png", Blob: blob, Size: int64(len(blob)),
+			})
+			require.NoError(b, err)
+		}
+	}
+	for _, filter := range []string{"has_attachments", "has_image"} {
+		b.Run(filter, func(b *testing.B) {
+			req := &apipb.ListMemosRequest{PageSize: benchmarkPageSize, Filter: filter}
+			resp, err := ts.Service.ListMemos(ownerCtx, req)
+			require.NoError(b, err)
+			require.Len(b, resp.Memos, benchmarkPageSize)
+			for i, memo := range resp.Memos {
+				require.Equal(b, fmt.Sprintf("memos/blob-%06d", (memoCount-1)/5*5-i*5), memo.Name)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				_, err := ts.Service.ListMemos(ownerCtx, req)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

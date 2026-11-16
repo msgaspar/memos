@@ -13,6 +13,7 @@ import (
 
 	"github.com/pkg/errors"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
 	storepb "github.com/usememos/memos/proto/gen/store"
 )
@@ -25,9 +26,8 @@ import (
 // Migration Flow:
 // 1. preMigrate: Check if DB is initialized. If not, apply LATEST.sql
 // 2. checkMinimumUpgradeVersion: Verify the database meets the fixed v0.31.0 baseline
-// 3. Migrate (prod mode): Apply incremental migrations from current to target version
-// 4. Migrate (demo mode): Seed database with demo data
-// Deployment configuration is loaded separately after migration completes.
+// 3. Migrate: Apply incremental migrations from current to target version
+// 4. Seed (demo mode, called by the server after the configuration apply): load the demo content
 //
 // Version Tracking:
 // - New installations: Schema version set in system_setting immediately
@@ -95,7 +95,6 @@ func validateMigrationFileName(filename string) error {
 
 // Migrate migrates the database schema to the latest version.
 // It checks the current schema version and applies any necessary migrations.
-// It also seeds the database with initial data if in demo mode.
 func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.preMigrate(ctx); err != nil {
 		return errors.Wrap(err, "failed to pre-migrate")
@@ -127,12 +126,6 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 	}
 
-	if s.profile.Demo {
-		// In demo mode, we should seed the database.
-		if err := s.seed(ctx); err != nil {
-			return errors.Wrap(err, "failed to seed")
-		}
-	}
 	if err := s.initializeInstanceAccessSetting(ctx); err != nil {
 		return errors.Wrap(err, "failed to initialize instance access setting")
 	}
@@ -177,6 +170,14 @@ func (s *Store) applyMigrations(ctx context.Context, currentSchemaVersion, targe
 		return err
 	}
 
+	cachedBasicSetting, err := s.GetInstanceBasicSetting(ctx)
+	if err != nil {
+		return errors.Wrap(err, "failed to get instance basic setting")
+	}
+	// The cache hands out a shared value; change a copy until the commit.
+	basicSetting := &storepb.InstanceBasicSetting{}
+	proto.Merge(basicSetting, cachedBasicSetting)
+
 	// Start a transaction to apply migrations atomically
 	tx, err := s.driver.GetDB().Begin()
 	if err != nil {
@@ -209,17 +210,19 @@ func (s *Store) applyMigrations(ctx context.Context, currentSchemaVersion, targe
 		migrationsApplied++
 	}
 
+	// Record the schema version in the same transaction, so on SQLite and
+	// PostgreSQL a crash cannot leave migrated tables behind an old version
+	// that re-runs them. MySQL commits DDL implicitly, so there the version
+	// write is only adjacent to the migration, as it was before.
+	if err := s.writeSchemaVersionTx(ctx, tx, basicSetting, targetSchemaVersion); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return errors.Wrap(err, "failed to commit migration transaction")
 	}
+	s.cacheInstanceBasicSetting(ctx, basicSetting)
 
 	slog.Info("migration completed", slog.Int("migrationsApplied", migrationsApplied))
-
-	// Update schema version after successful migration
-	if err := s.updateCurrentSchemaVersion(ctx, targetSchemaVersion); err != nil {
-		return errors.Wrap(err, "failed to update current schema version")
-	}
-
 	return nil
 }
 
@@ -246,19 +249,23 @@ func (s *Store) preMigrate(ctx context.Context) error {
 		if err := s.execute(ctx, tx, string(bytes)); err != nil {
 			return errors.Errorf("failed to execute SQL file %s, err %s", filePath, err)
 		}
-		if err := tx.Commit(); err != nil {
-			return errors.Wrap(err, "failed to commit transaction")
-		}
 
-		// Upsert current schema version to database.
+		// Record the schema version with the schema, so on SQLite and
+		// PostgreSQL a crash cannot leave an initialized database without
+		// one. MySQL commits DDL implicitly and keeps the earlier behavior.
 		schemaVersion, err := s.GetCurrentSchemaVersion()
 		if err != nil {
 			return errors.Wrap(err, "failed to get current schema version")
 		}
-		slog.Info("database initialized successfully", slog.String("schemaVersion", schemaVersion))
-		if err := s.updateCurrentSchemaVersion(ctx, schemaVersion); err != nil {
-			return errors.Wrap(err, "failed to update current schema version")
+		basicSetting := &storepb.InstanceBasicSetting{}
+		if err := s.writeSchemaVersionTx(ctx, tx, basicSetting, schemaVersion); err != nil {
+			return err
 		}
+		if err := tx.Commit(); err != nil {
+			return errors.Wrap(err, "failed to commit transaction")
+		}
+		s.cacheInstanceBasicSetting(ctx, basicSetting)
+		slog.Info("database initialized successfully", slog.String("schemaVersion", schemaVersion))
 	}
 
 	if err := s.checkMinimumUpgradeVersion(ctx); err != nil {
@@ -275,10 +282,11 @@ func (s *Store) getSeedBasePath() string {
 	return fmt.Sprintf("seed/%s/", s.profile.Driver)
 }
 
-// seed seeds the database with initial data.
-// It reads all seed files from the embedded filesystem and executes them in order.
-// This is only supported for SQLite databases and is used in demo mode.
-func (s *Store) seed(ctx context.Context) error {
+// Seed loads the demo content: every seed file from the embedded filesystem,
+// in name order, in one transaction. The server calls it in demo mode after
+// the declarative configuration is applied, so content attaches to the users
+// the configuration declares. Only SQLite has seed files.
+func (s *Store) Seed(ctx context.Context) error {
 	// Only seed for SQLite - other databases should use production data
 	if s.profile.Driver != "sqlite" {
 		slog.Warn("seed is only supported for SQLite, skipping for other databases")
@@ -309,6 +317,31 @@ func (s *Store) seed(ctx context.Context) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// CheckSchemaCurrent fails unless the database is initialized and at the
+// schema version this binary migrates to. Commands that only read, such as a
+// configuration plan, call it instead of Migrate, which writes.
+func (s *Store) CheckSchemaCurrent(ctx context.Context) error {
+	initialized, err := s.driver.IsInitialized(ctx)
+	if err != nil {
+		return errors.Wrap(err, "failed to check whether the database is initialized")
+	}
+	if !initialized {
+		return errors.New("the database is not initialized; start Memos once to create it")
+	}
+	basic, err := s.GetInstanceBasicSetting(ctx)
+	if err != nil {
+		return err
+	}
+	current, err := s.GetCurrentSchemaVersion()
+	if err != nil {
+		return errors.Wrap(err, "failed to get current schema version")
+	}
+	if basic.SchemaVersion != current {
+		return errors.Errorf("the database schema is %s but this Memos expects %s; start this version of Memos once to migrate it", basic.SchemaVersion, current)
+	}
+	return nil
 }
 
 // GetCurrentSchemaVersion returns the latest schema version available for the configured database driver.
@@ -376,7 +409,7 @@ func getSchemaVersionOfMigrateScript(filePath string) (string, error) {
 		return "", err
 	}
 	series := elements[len(elements)-2]
-	rawSequence := strings.Split(elements[len(elements)-1], MigrateFileNameSplit)[0]
+	rawSequence, _, _ := strings.Cut(elements[len(elements)-1], MigrateFileNameSplit)
 	sequence, err := strconv.Atoi(rawSequence)
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to convert migration sequence to int: %s", rawSequence)
@@ -405,21 +438,28 @@ func (*Store) execute(ctx context.Context, tx *sql.Tx, stmt string) error {
 	return nil
 }
 
-// updateCurrentSchemaVersion updates the current schema version in the instance basic setting.
-// It retrieves the instance basic setting, updates the schema version, and upserts the setting back to the database.
-func (s *Store) updateCurrentSchemaVersion(ctx context.Context, schemaVersion string) error {
-	instanceBasicSetting, err := s.GetInstanceBasicSetting(ctx)
+// writeSchemaVersionTx sets basicSetting's schema version and writes it
+// within tx. The caller commits tx and then caches basicSetting.
+func (s *Store) writeSchemaVersionTx(ctx context.Context, tx *sql.Tx, basicSetting *storepb.InstanceBasicSetting, schemaVersion string) error {
+	basicSetting.SchemaVersion = schemaVersion
+	value, err := protojson.Marshal(basicSetting)
 	if err != nil {
-		return errors.Wrap(err, "failed to get instance basic setting")
+		return errors.Wrap(err, "failed to marshal instance basic setting")
 	}
-	instanceBasicSetting.SchemaVersion = schemaVersion
-	if _, err := s.UpsertInstanceSetting(ctx, &storepb.InstanceSetting{
-		Key:   storepb.InstanceSettingKey_BASIC,
-		Value: &storepb.InstanceSetting_BasicSetting{BasicSetting: instanceBasicSetting},
+	if err := s.driver.UpsertInstanceSettingTx(ctx, tx, &InstanceSetting{
+		Name:  storepb.InstanceSettingKey_BASIC.String(),
+		Value: string(value),
 	}); err != nil {
-		return errors.Wrap(err, "failed to upsert instance setting")
+		return errors.Wrap(err, "failed to update current schema version")
 	}
 	return nil
+}
+
+func (s *Store) cacheInstanceBasicSetting(ctx context.Context, basicSetting *storepb.InstanceBasicSetting) {
+	s.cacheInstanceSetting(ctx, &storepb.InstanceSetting{
+		Key:   storepb.InstanceSettingKey_BASIC,
+		Value: &storepb.InstanceSetting_BasicSetting{BasicSetting: basicSetting},
+	})
 }
 
 // checkMinimumUpgradeVersion rejects databases whose migration history is no longer shipped.

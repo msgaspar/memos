@@ -1,87 +1,58 @@
-import { cn } from "@/lib/utils";
-
 export type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
-/** Per-level heading classes (size / weight / border), matching MemoContent. */
-const headingLevelClasses: Record<HeadingLevel, string> = {
-  1: "text-3xl font-bold border-b border-border pb-2",
-  2: "text-2xl font-semibold border-b border-border pb-1.5",
-  3: "text-xl font-semibold",
-  4: "text-lg font-semibold",
-  5: "text-base font-semibold",
-  6: "text-base font-medium text-muted-foreground",
-};
-
-/** Shared base classes applied to every heading level. */
-const headingBaseClasses = "mt-3 mb-2 leading-tight";
-
 /**
- * Complete heading class per level, precomputed once at module load (base +
- * per-level). headingClass is a hot path — MemoContent renders it per heading
- * on every content render — so the cn() merge happens here, not per call.
+ * Per-level heading classes for the editor's `theme.classes.heading`. Size, line
+ * height and weight are the editor's own: it scales h1–h3 from its `fontSize` and
+ * `lineHeight` tokens (1.5×, 1.25× and 1.125×, each with the body's leading) and
+ * sets h4–h6 at the body size, in its own unlayered stylesheet, so a Tailwind size
+ * here would never apply and a changed token would not reach it. Only what the
+ * editor leaves to the app goes here. The composer and the memo view are the same
+ * Markdown editor, so a heading looks the same while editing and after saving.
  */
-const headingClasses: Record<HeadingLevel, string> = {
-  1: cn(headingBaseClasses, headingLevelClasses[1]),
-  2: cn(headingBaseClasses, headingLevelClasses[2]),
-  3: cn(headingBaseClasses, headingLevelClasses[3]),
-  4: cn(headingBaseClasses, headingLevelClasses[4]),
-  5: cn(headingBaseClasses, headingLevelClasses[5]),
-  6: cn(headingBaseClasses, headingLevelClasses[6]),
+export const headingClasses: Readonly<Partial<Record<HeadingLevel, string>>> = {
+  6: "text-mu-text-secondary",
 };
 
 /**
- * Single source of truth for the styling of common markdown elements rendered
- * by the read-only memo view (MemoContent). Each value is a complete, standalone
- * Tailwind class string so it can be dropped onto a DOM element as-is (MemoContent
- * merges them with `cn`). The editor does not use these — it styles its raw
- * markdown source via CodeMirror decorations in `MemoEditor/Editor/theme.ts`.
- *
- * These are static string literals so Tailwind's JIT scanner detects them.
+ * App classes for Markdown elements, handed to the editor's `theme.classes`
+ * (lib/memo-markdown.ts) and used by the app UI that renders into memos (link
+ * cards, raw HTML). Block spacing is the editor's own. Each value is a complete,
+ * static Tailwind class string so Tailwind's JIT scanner detects it.
  */
 export const markdownStyles = {
-  paragraph: "my-0 mb-2 leading-6",
-  blockquote: "my-0 mb-2 border-s-4 border-primary/30 ps-3 text-muted-foreground italic",
-  // Direct-child selectors keep each nested disclosure's indicator independent.
-  details: "my-0 mb-2 min-w-0 ps-5 [&[open]>summary]:mb-1 [&[open]>summary>svg]:rotate-90 [&>*:last-child]:mb-0",
-  summary:
-    "relative -ms-5 block cursor-pointer list-none rounded-sm ps-5 pe-1 font-normal leading-6 [overflow-wrap:anywhere] transition-colors hover:bg-muted/50 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring motion-reduce:transition-none [&::-webkit-details-marker]:hidden",
-  disclosureIcon:
-    "pointer-events-none absolute start-0.5 top-1.25 size-3.5 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none rtl:rotate-180",
-  bulletList: "my-0 mb-2 list-outside ps-6 list-disc",
-  orderedList: "my-0 mb-2 list-outside ps-6 list-decimal",
-  listItem: "mt-0.5 leading-6",
-  // Shared by the read-only task item (MemoContent/markdown/List.tsx) and the
-  // editor so the checkbox + text grid stays identical in both.
-  taskListItem: "mt-0.5 min-w-0 leading-6 list-none grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-2 [&>[data-slot=checkbox]]:mt-1",
-  taskItemContent: "min-w-0 [overflow-wrap:anywhere] [&>*:last-child]:mb-0",
-  inlineCode: "font-mono text-sm bg-muted px-1 py-0.5 rounded-md",
-  link: "text-primary underline decoration-primary/50 underline-offset-2 transition-colors hover:decoration-primary",
-  horizontalRule: "my-2 h-0 border-0 border-b border-border",
+  // Relative size so code inside headings scales with the heading.
+  inlineCode: "font-mono text-[0.875em] bg-mu-well px-1 py-0.5 rounded-mu-md",
+  codeBlock: "rich:bg-mu-well!",
+  // Keep the editor's white checkmark readable when Dark uses a pale accent.
+  taskList:
+    "[--mbe-border:var(--mu-control-edge)] [--mbe-accent:light-dark(var(--mu-accent),color-mix(in_oklab,var(--mu-accent)_55%,var(--mu-surface)))]",
+  link: "text-mu-accent underline decoration-mu-accent/50 underline-offset-2 transition-colors hover:decoration-mu-accent",
+  image: "max-w-full my-2 rounded-mu-lg",
 } as const;
 
-/** Complete heading class for a given level (shared base + per-level classes). */
-export const headingClass = (level: HeadingLevel): string => headingClasses[level];
-
 /**
- * Tag pill styling for the read-only memo view (MemoContent/Tag.tsx). Split into
- * two tokens so the viewer can swap `defaultColor` for an inline custom color.
- * (The editor does not use these; it colors `#tag` source via the
- * `cm-memo-tag` decoration in Editor/theme.ts.)
+ * `#tag` styling wherever the editor shows a memo. In rich text and the memo view a tag
+ * inherits the surrounding typography with a quiet inline fill. In source mode the
+ * `rich:` variant (index.css) leaves only the text and its color.
  */
 export const tagStyles = {
-  /** Shape, padding, and typography — always applied. */
-  base: "inline-flex items-center align-baseline px-1.5 py-0.5 text-[0.9em] leading-none font-normal rounded-full border",
-  /** Default theme color, used when no custom tag color is set. */
-  defaultColor: "border-primary text-primary bg-primary/15",
+  base: "rich:inline rich:rounded-mu-sm rich:border rich:border-transparent rich:px-0.5 rich:box-decoration-clone",
+  interactive: "mu-focus rich:focus-visible:border-mu-focus touch-manipulation",
+  /** Ink in the well, used when the tag has no color of its own. */
+  defaultColor: "text-mu-text rich:bg-mu-well rich:[&[role=button]]:hover:bg-mu-hover",
+  /**
+   * The user's color, read from `--tag-color` on the element, as the package's Badge `color` draws
+   * it: lightness kept between 50% and 75%, then clipped to sRGB before the 18% tint.
+   * The text stays ink so user-chosen colors cannot reduce its contrast.
+   */
+  customColor:
+    "text-mu-text rich:[--tag-tint:color(from_oklch(from_var(--tag-color)_clamp(0.5,l,0.75)_c_h)_srgb_clamp(0,r,1)_clamp(0,g,1)_clamp(0,b,1))] rich:bg-[color-mix(in_srgb,var(--tag-tint)_18%,transparent)] rich:[&[role=button]]:hover:bg-[color-mix(in_srgb,var(--tag-tint)_26%,transparent)]",
 } as const;
 
 /**
- * `@mention` styling for the read-only memo view (MemoContent/Mention.tsx).
- * Unlike a tag this is not a pill — it is a primary-colored accent (the read-only
- * view adds `hover:underline` for its link). (The editor does not use these; it
- * colors `@mention` source via the `cm-memo-mention` decoration in
- * Editor/theme.ts.)
+ * `@mention` styling for a resolved mention in the memo view. Unlike a tag this is
+ * not a pill — it is a primary-colored accent, underlined on hover.
  */
 export const mentionStyles = {
-  base: "text-primary underline-offset-2",
+  base: "text-mu-accent underline-offset-2",
 } as const;

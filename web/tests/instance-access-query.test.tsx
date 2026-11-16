@@ -11,7 +11,7 @@ import {
   InstanceSetting_AccessSettingSchema,
   InstanceSetting_Key,
   InstanceSettingSchema,
-} from "@/types/proto/api/v1/instance_service_pb";
+} from "@/types/proto/api/instance_service_pb";
 
 const clients = vi.hoisted(() => ({
   batchGetInstanceSettings: vi.fn(),
@@ -64,7 +64,7 @@ const InstanceProbe = () => {
 
 describe("instance ACCESS React Query integration", () => {
   beforeEach(() => {
-    clients.batchGetInstanceSettings.mockReset().mockResolvedValue({ settings: [] });
+    clients.batchGetInstanceSettings.mockReset().mockResolvedValue({ instanceSettings: [] });
     clients.getInstanceProfile.mockReset().mockResolvedValue(create(InstanceProfileSchema, { accessMode: InstanceAccessMode.PRIVATE }));
     clients.getInstanceSetting.mockReset().mockResolvedValue(buildAccessSetting(InstanceAccessMode.PRIVATE));
     clients.updateInstanceSetting.mockReset().mockResolvedValue(buildAccessSetting(InstanceAccessMode.PUBLIC));
@@ -114,7 +114,7 @@ describe("instance ACCESS React Query integration", () => {
     await waitFor(() => expect(screen.getByTestId("setting-access")).toHaveTextContent(String(InstanceAccessMode.PRIVATE)));
 
     expect(clients.batchGetInstanceSettings).toHaveBeenCalledWith({
-      names: ["instance/settings/GENERAL", "instance/settings/MEMO_RELATED"],
+      names: ["instance/settings/GENERAL"],
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Make public" }));

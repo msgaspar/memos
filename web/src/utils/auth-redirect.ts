@@ -6,8 +6,10 @@ import { buildAuthRoute, isPublicRoute } from "./redirect-safety";
 // keep working without every caller switching to the new module. The side-effectful
 // `redirectOnAuthFailure` lives here; pure logic lives in `./redirect-safety`.
 export {
+  AUTH_AUTO_SIGN_IN_PARAM,
   AUTH_REASON_PARAM,
   AUTH_REASON_PROTECTED_MEMO,
+  AUTH_REASON_SIGNUPS_CLOSED,
   AUTH_REDIRECT_PARAM,
   appendSearchParams,
   buildAuthRoute,

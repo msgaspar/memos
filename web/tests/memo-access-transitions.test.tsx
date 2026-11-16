@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useResolvedRelationMemos } from "@/components/MemoMetadata/Relation/useResolvedRelationMemos";
 import { findMemoInCollectionQueries, memoKeys, useMemo, useUpdateMemo } from "@/hooks/useMemoQueries";
-import { ListMemosResponseSchema, MemoRelation_Type, MemoRelationSchema, MemoSchema } from "@/types/proto/api/v1/memo_service_pb";
+import { ListMemosResponseSchema, MemoRelation_Type, MemoRelationSchema, MemoSchema } from "@/types/proto/api/memo_service_pb";
 
 const api = vi.hoisted(() => ({ getMemo: vi.fn(), updateMemo: vi.fn() }));
 vi.mock("@/connect", () => ({ memoServiceClient: api }));
@@ -91,7 +91,7 @@ describe("memo access transitions", () => {
           reject = fail;
         }),
     );
-    const { result } = renderHook(() => useUpdateMemo(), { wrapper });
+    const { result } = renderHook(() => useUpdateMemo(memo.name), { wrapper });
     act(() => result.current.mutate({ update: { name: memo.name, space: "spaces/b" }, updateMask: ["space"] }));
     await waitFor(() => expect(api.updateMemo).toHaveBeenCalledOnce());
     expect(client.getQueryData(memoKeys.detail(memo.name))).toEqual(memo);

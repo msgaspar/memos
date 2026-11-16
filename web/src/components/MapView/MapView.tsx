@@ -1,23 +1,24 @@
 import { create } from "@bufbuild/protobuf";
+import { Button, buttonClasses } from "@usememos/ui";
 import type L from "leaflet";
 import { CrosshairIcon, MinusIcon, PlusIcon } from "lucide-react";
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { toast } from "react-hot-toast";
 import { useLocation, useNavigate } from "react-router-dom";
-import { getLocationDisplayText } from "@/components/MemoMetadata/Location/locationHelpers";
+import { getLocationCoordinatesText } from "@/components/MemoMetadata/Location/locationHelpers";
 import { MEMO_PANEL_INSET, MEMO_PANEL_WIDTH_CSS, MemoPanel, MemoPanelList, type MemoPanelSize } from "@/components/MemoPanel";
 import { createMemoNavigationState } from "@/components/MemoView/navigation";
-import { Button, buttonVariants } from "@/components/ui/button";
 import { useMemoFilterContext } from "@/contexts/MemoFilterContext";
 import { useSpaceContext } from "@/contexts/SpaceContext";
 import useCurrentUser from "@/hooks/useCurrentUser";
 import useMediaQuery from "@/hooks/useMediaQuery";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
-import { LocationSchema } from "@/types/proto/api/v1/memo_service_pb";
+import { LocationSchema } from "@/types/proto/api/memo_service_pb";
 import { useTranslate } from "@/utils/i18n";
 import { fitMemos, MapCanvas } from "./MapCanvas";
-import { locationKey, type MapViewport, readViewport, splitLabel } from "./model";
+import { locationKey, type MapViewport, pointLabel, readViewport, splitLabel } from "./model";
 import { useMapMemos } from "./useMapMemos";
+import { useMapPins } from "./useMapPins";
 
 /** Enough map beside the card to keep a selection visible. */
 const RESERVED_BESIDE_PANEL = 160;
@@ -33,6 +34,7 @@ export function MapView() {
   const user = useCurrentUser();
   const { filters, removeFilter } = useMemoFilterContext();
   const query = useMapMemos();
+  const pins = useMapPins(query.memos, !creatorUsername);
   const mapRef = useRef<L.Map | null>(null);
   const [panelSize, setPanelSize] = useState<MemoPanelSize>({ width: 0, height: 0 });
   // Only a real change may re-render the map tree.
@@ -111,47 +113,50 @@ export function MapView() {
       }, true);
     }
   }, [query.complete, query.memos, selected, updateQuery]);
+  // A place label is its author's words: the title uses one only when it speaks for every memo
+  // there, and a new memo only inherits the writer's own label, never someone else's.
+  const sharedLabel = singlePoint ? pointLabel(selectedMemos) : "";
+  const ownLabel = singlePoint && user ? pointLabel(selectedMemos.filter((memo) => memo.creator === user.name)) : "";
   const composeLocation = useMemo(
     () =>
       singlePoint
         ? create(LocationSchema, {
             latitude: singlePoint.latitude,
             longitude: singlePoint.longitude,
-            placeholder: getLocationDisplayText(singlePoint),
+            placeholder: ownLabel || getLocationCoordinatesText(singlePoint),
           })
         : undefined,
-    [singlePoint],
+    [singlePoint, ownLabel],
   );
   const afterSave = async (name: string) => {
     setSaving(false);
     const result = await query.refetch();
     if (result.data?.pages.some((page) => page.memos.some((memo) => memo.name === name && memo.location))) {
       updateQuery((search) => search.set("memo", name));
-    } else
-      toast(
-        (toastState) => (
-          <span>
-            {t(result.isError ? "map.load-error" : "map.saved-outside-filter")}{" "}
-            <button
-              type="button"
-              className="underline"
-              onClick={() => {
-                toast.dismiss(toastState.id);
-                navigate(`/${name}`, { state: createMemoNavigationState(`${location.pathname}${location.search}`) });
-              }}
-            >
-              {t("map.open-memo")}
-            </button>
-          </span>
-        ),
-        { duration: 8000 },
-      );
+    } else {
+      const id = toast.add({
+        title: t(result.isError ? "map.load-error" : "map.saved-outside-filter"),
+        type: result.isError ? "danger" : undefined,
+        timeout: 8000,
+        actionProps: {
+          children: t("map.open-memo"),
+          onClick: () => {
+            toast.close(id);
+            navigate(`/${name}`, { state: createMemoNavigationState(`${location.pathname}${location.search}`) });
+          },
+        },
+      });
+    }
   };
-  const heading = singlePoint ? splitLabel(getLocationDisplayText(singlePoint)) : { title: t("map.selection") };
+  const heading = !singlePoint
+    ? { title: t("map.selection") }
+    : sharedLabel
+      ? splitLabel(sharedLabel)
+      : { title: getLocationCoordinatesText(singlePoint) };
   // Floating surfaces let the basemap show through, the way Notion's and Linear's overlays do.
-  const surfaceClass = "rounded-lg border border-border/60 bg-background/85 shadow-xs backdrop-blur-md";
+  const surfaceClass = "rounded-mu-lg border border-mu-line/60 bg-mu-canvas/85 backdrop-blur-md";
   // The calendar's 28px quiet square, a touch more on phones.
-  const toolClass = cn(buttonVariants({ variant: "quiet", size: "icon-compact" }), "size-8 md:size-7");
+  const toolClass = cn(buttonClasses({ variant: "ghost", size: "sm", iconOnly: true }), "size-8 md:size-7");
 
   return (
     <section
@@ -167,6 +172,7 @@ export function MapView() {
     >
       <MapCanvas
         memos={query.memos}
+        pins={pins}
         selected={selected}
         viewport={viewport}
         complete={query.complete}
@@ -179,12 +185,12 @@ export function MapView() {
         onReady={onReady}
         onTileError={() => setTileError(true)}
       />
-      <h1 className="sr-only">{t("common.map")}</h1>
+      <h1 className="mu-visually-hidden">{t("common.map")}</h1>
       {!query.complete && !query.isError && (
         <p
           role="status"
           className={cn(
-            "absolute start-3 top-3 z-10 flex h-7 items-center px-2.5 text-xs text-muted-foreground tabular-nums",
+            "absolute start-3 top-3 z-10 flex h-7 items-center px-2.5 mu-caption text-mu-text-secondary tabular-nums",
             surfaceClass,
           )}
         >
@@ -207,7 +213,7 @@ export function MapView() {
                 title={t("map.zoom-in")}
                 onClick={() => mapRef.current?.zoomIn()}
               >
-                <PlusIcon strokeWidth={1.75} />
+                <PlusIcon className="mu-icon" />
               </button>
               <button
                 type="button"
@@ -216,9 +222,9 @@ export function MapView() {
                 title={t("map.zoom-out")}
                 onClick={() => mapRef.current?.zoomOut()}
               >
-                <MinusIcon strokeWidth={1.75} />
+                <MinusIcon className="mu-icon" />
               </button>
-              <span aria-hidden="true" className="my-1 h-px w-4 bg-border/70" />
+              <span aria-hidden="true" className="my-1 h-px w-4 bg-mu-line/70" />
             </>
           )}
           <button
@@ -231,13 +237,13 @@ export function MapView() {
               if (mapRef.current) fitMemos(mapRef.current, query.memos);
             }}
           >
-            <CrosshairIcon strokeWidth={1.75} />
+            <CrosshairIcon className="mu-icon" />
           </button>
         </div>
       )}
       <div className="pointer-events-none absolute inset-x-3 bottom-8 z-10 flex flex-col items-center gap-2">
         {query.isError && (
-          <p role="alert" className={cn("pointer-events-auto px-4 py-2 text-sm", surfaceClass)}>
+          <p role="alert" className={cn("pointer-events-auto px-4 py-2 mu-body", surfaceClass)}>
             {t("map.load-error")}{" "}
             <button type="button" className="ms-2 underline" onClick={() => void query.retry()}>
               {t("search.retry")}
@@ -245,7 +251,7 @@ export function MapView() {
           </p>
         )}
         {tileError && (
-          <p role="alert" className={cn("pointer-events-auto px-4 py-2 text-sm", surfaceClass)}>
+          <p role="alert" className={cn("pointer-events-auto px-4 py-2 mu-body", surfaceClass)}>
             {t("map.tile-error")}{" "}
             <button
               type="button"
@@ -264,11 +270,14 @@ export function MapView() {
       </div>
       {query.complete && query.memos.length === 0 && !open && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-8">
-          <div className={cn("pointer-events-auto max-w-sm rounded-xl p-5 text-center", surfaceClass)}>
+          <div className={cn("pointer-events-auto max-w-sm rounded-mu-xl p-5 text-center", surfaceClass)}>
             <h2 className="font-medium">{t(filters.length ? "map.no-results" : "map.empty")}</h2>
-            <p className="mt-2 text-sm text-muted-foreground">{t(filters.length ? "map.no-results-hint" : "map.empty-hint")}</p>
+            {/* Guests cannot add a location, so only filters get a hint for them. */}
+            {(filters.length > 0 || user) && (
+              <p className="mt-2 mu-body text-mu-text-secondary">{t(filters.length ? "map.no-results-hint" : "map.empty-hint")}</p>
+            )}
             {filters.length > 0 && (
-              <Button className="mt-4" variant="outline" onClick={() => removeFilter(() => true)}>
+              <Button className="mt-4" variant="neutral" onClick={() => removeFilter(() => true)}>
                 {t("map.clear-filters")}
               </Button>
             )}
@@ -291,9 +300,9 @@ export function MapView() {
           compose={
             composeLocation && user && (!creatorUsername || creatorUsername === user.username)
               ? {
-                  cacheKey: `map-editor:${user?.name}:${selectedSpaceName ?? "all"}:${locationKey(composeLocation)}`,
+                  scope: `map:${user?.name}:${selectedSpaceName ?? "all"}:${locationKey(composeLocation)}`,
                   label: t("map.new-here"),
-                  defaults: { defaultLocation: composeLocation },
+                  defaults: { location: composeLocation },
                   onComposingChange: setComposing,
                   onSavingChange: setSaving,
                   onConfirm: (name) => void afterSave(name),

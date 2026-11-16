@@ -97,6 +97,9 @@ CREATE TABLE attachment (
   payload TEXT NOT NULL DEFAULT '{}'
 );
 
+CREATE INDEX idx_attachment_creator_id ON attachment(creator_id);
+CREATE INDEX idx_attachment_memo_id_type ON attachment(memo_id, type);
+
 -- idp
 CREATE TABLE idp (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

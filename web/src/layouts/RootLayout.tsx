@@ -18,7 +18,7 @@ import useCurrentUser from "@/hooks/useCurrentUser";
 import useMediaQuery from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
 import { ROUTES, resolveCollectionRoute } from "@/router/routes";
-import { InstanceAccessMode } from "@/types/proto/api/v1/instance_service_pb";
+import { InstanceAccessMode } from "@/types/proto/api/instance_service_pb";
 import { buildAuthRoute, shouldGatePrivateInstance } from "@/utils/auth-redirect";
 import { useTranslate } from "@/utils/i18n";
 
@@ -28,11 +28,16 @@ const DemoBanner = () => {
   const t = useTranslate();
 
   return (
-    <div className="static w-full shrink-0 border-b border-border bg-muted/70 px-4 py-2 text-sm text-muted-foreground sm:px-6">
+    <div className="static w-full shrink-0 border-b border-mu-line bg-mu-well/70 px-4 py-2 mu-body text-mu-text-secondary sm:px-6">
       <div className="mx-auto flex max-w-5xl flex-col items-start gap-1 sm:flex-row sm:items-center sm:justify-center sm:gap-2">
-        <span className="font-medium text-foreground">{t("demo.banner-title")}</span>
+        <span className="font-medium text-mu-text">{t("demo.banner-title")}</span>
         <span>{t("demo.banner-description")}</span>
-        <a className="font-medium text-primary underline-offset-4 hover:underline" href={MEMOS_DEPLOY_URL} target="_blank" rel="noreferrer">
+        <a
+          className="font-medium text-mu-accent underline-offset-4 hover:underline"
+          href={MEMOS_DEPLOY_URL}
+          target="_blank"
+          rel="noreferrer"
+        >
           {t("demo.deploy-link")}
         </a>
       </div>
@@ -81,11 +86,11 @@ const RootLayoutContent = () => {
   return (
     <div
       ref={shellRef}
-      className={cn("w-full bg-background", fullBleed ? "h-dvh overflow-hidden" : "min-h-full")}
+      className={cn("w-full bg-mu-canvas", fullBleed ? "h-dvh overflow-hidden" : "min-h-full")}
       style={{ [SIDEBAR_WIDTH_VAR]: `${sidebarWidth}px` } as CSSProperties}
     >
       {md && (
-        <div className="fixed inset-y-0 start-0 z-30 w-(--app-sidebar-width) border-e border-border/70">
+        <div className="fixed inset-y-0 start-0 z-30 w-(--app-sidebar-width) border-e border-mu-line/70">
           <AppSidebar />
           <SidebarResizeHandle
             width={sidebarWidth}

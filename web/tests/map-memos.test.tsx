@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useMapMemos } from "@/components/MapView/useMapMemos";
 import { memoDetailQueryOptions, useDeleteMemo, useUpdateMemo } from "@/hooks/useMemoQueries";
-import { MemoSchema } from "@/types/proto/api/v1/memo_service_pb";
+import { MemoSchema } from "@/types/proto/api/memo_service_pb";
 
 const state = vi.hoisted(() => ({ list: vi.fn(), update: vi.fn(), delete: vi.fn(), get: vi.fn(), filter: "", settingsReady: true }));
 vi.mock("@/connect", () => ({
@@ -97,7 +97,7 @@ describe("map pagination", () => {
     const updated = { ...original.memos[0], location: { ...original.memos[0].location!, latitude: 0, longitude: 0 } };
     state.update.mockResolvedValueOnce(updated);
     state.list.mockResolvedValueOnce({ memos: [updated], nextPageToken: "" });
-    const mutations = renderHook(() => ({ update: useUpdateMemo(), remove: useDeleteMemo() }), { wrapper });
+    const mutations = renderHook(() => ({ update: useUpdateMemo(updated.name), remove: useDeleteMemo() }), { wrapper });
     await act(async () => {
       await mutations.result.current.update.mutateAsync({ update: updated, updateMask: ["location"] });
     });

@@ -525,6 +525,56 @@ func TestAttachmentUpdate(t *testing.T) {
 	ts.Close()
 }
 
+func TestAttachmentUpdateContent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ts := NewTestingStore(ctx, t)
+	defer ts.Close()
+
+	attachment, err := ts.CreateAttachment(ctx, &store.Attachment{
+		UID:       shortuuid.New(),
+		CreatorID: 101,
+		Filename:  "drawing.canvas.png",
+		Blob:      []byte("first drawing"),
+		Type:      "application/octet-stream",
+		Size:      13,
+	})
+	require.NoError(t, err)
+
+	// Database content moves to a local file: the blob is cleared.
+	err = ts.UpdateAttachment(ctx, &store.UpdateAttachment{
+		ID: attachment.ID,
+		Content: &store.AttachmentContent{
+			Type:        "image/png",
+			Size:        2048,
+			StorageType: storepb.AttachmentStorageType_LOCAL,
+			Reference:   "assets/drawing.canvas.png",
+		},
+	})
+	require.NoError(t, err)
+	found, err := ts.GetAttachment(ctx, &store.FindAttachment{ID: &attachment.ID, GetBlob: true})
+	require.NoError(t, err)
+	require.Equal(t, attachment.UID, found.UID)
+	require.Equal(t, "image/png", found.Type)
+	require.Equal(t, int64(2048), found.Size)
+	require.Equal(t, storepb.AttachmentStorageType_LOCAL, found.StorageType)
+	require.Equal(t, "assets/drawing.canvas.png", found.Reference)
+	require.Empty(t, found.Blob)
+
+	// And back into the database: the reference is cleared.
+	err = ts.UpdateAttachment(ctx, &store.UpdateAttachment{
+		ID:      attachment.ID,
+		Content: &store.AttachmentContent{Type: "image/png", Size: 14, Blob: []byte("second drawing")},
+	})
+	require.NoError(t, err)
+	found, err = ts.GetAttachment(ctx, &store.FindAttachment{ID: &attachment.ID, GetBlob: true})
+	require.NoError(t, err)
+	require.Equal(t, int64(14), found.Size)
+	require.Equal(t, storepb.AttachmentStorageType_ATTACHMENT_STORAGE_TYPE_UNSPECIFIED, found.StorageType)
+	require.Empty(t, found.Reference)
+	require.Equal(t, []byte("second drawing"), found.Blob)
+}
+
 func TestAttachmentGetByUID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -562,7 +612,7 @@ func TestAttachmentListWithPagination(t *testing.T) {
 	ts := NewTestingStore(ctx, t)
 
 	// Create 5 attachments
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		_, err := ts.CreateAttachment(ctx, &store.Attachment{
 			UID:       shortuuid.New(),
 			CreatorID: 101,
@@ -642,7 +692,7 @@ func TestMemoMutationConcurrentUpdatesNoSQLiteBusy(t *testing.T) {
 	errs := make([]error, workers)
 	var wg sync.WaitGroup
 	content := "updated"
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		wg.Go(func() {
 			<-start
 			errs[i] = ts.ApplyMemoMutation(ctx, &store.MemoMutation{
@@ -681,7 +731,7 @@ func TestMemoMutationConcurrentUpdatesSameMemoNoSQLiteBusy(t *testing.T) {
 	errs := make([]error, workers)
 	var wg sync.WaitGroup
 	content := "updated"
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		wg.Go(func() {
 			<-start
 			errs[i] = ts.ApplyMemoMutation(ctx, &store.MemoMutation{
@@ -733,9 +783,14 @@ func TestAttachmentStorageUsage(t *testing.T) {
 	}
 	_, err = ts.CreateAttachment(ctx, &store.Attachment{UID: shortuuid.New(), CreatorID: 102, Filename: "other", Size: 123})
 	require.NoError(t, err)
+	// External links store no bytes, even when an import declared a size.
+	_, err = ts.CreateAttachment(ctx, &store.Attachment{
+		UID: shortuuid.New(), CreatorID: creator.ID, Filename: "link", Size: 456, StorageType: storepb.AttachmentStorageType_EXTERNAL, Reference: "https://example.com/file",
+	})
+	require.NoError(t, err)
 	size, err = ts.GetAttachmentStorageUsage(ctx, creator.ID)
 	require.NoError(t, err)
-	require.Equal(t, expected, size)
+	require.Equal(t, expected, size, "external links do not count")
 
 	memo, err := ts.CreateMemo(ctx, &store.Memo{UID: shortuuid.New(), CreatorID: creator.ID, Content: "memo", Visibility: store.Private})
 	require.NoError(t, err)

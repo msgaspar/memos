@@ -1,4 +1,4 @@
-import { User, User_Role } from "@/types/proto/api/v1/user_service_pb";
+import { User, User_Role } from "@/types/proto/api/user_service_pb";
 
 export const isSuperUser = (user: User | undefined) => {
   return user && user.role === User_Role.ADMIN;
@@ -11,3 +11,6 @@ export const isSuperUser = (user: User | undefined) => {
 export const canManageMemo = (memo: { creator: string }, user: User | undefined): boolean => {
   return !!user && (memo.creator === user.name || !!isSuperUser(user));
 };
+
+/** Whether the user may change an attachment's content: its uploader, or an instance admin. */
+export const canManageAttachment = (attachment: { creator: string }, user: User | undefined): boolean => canManageMemo(attachment, user);

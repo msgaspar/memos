@@ -66,6 +66,7 @@ CREATE TABLE `memo` (
 );
 
 CREATE INDEX `idx_memo_space_id` ON `memo`(`space_id`, `row_status`, `created_ts`, `id`);
+CREATE INDEX `idx_memo_creator_id` ON `memo`(`creator_id`);
 
 -- memo_relation
 CREATE TABLE `memo_relation` (
@@ -94,6 +95,9 @@ CREATE TABLE `attachment` (
   `reference` TEXT NOT NULL DEFAULT (''),
   `payload` TEXT NOT NULL
 );
+
+CREATE INDEX `idx_attachment_creator_id` ON `attachment`(`creator_id`);
+CREATE INDEX `idx_attachment_memo_id_type` ON `attachment`(`memo_id`, `type`);
 
 -- idp
 CREATE TABLE `idp` (
